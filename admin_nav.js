@@ -40,7 +40,9 @@
       items: [
         { id: "skills", href: "admin_skills.html", label: "技能", perm: "cap.skill_manage" },
         { id: "mcp", href: "admin_mcp.html", label: "MCP", perm: "cap.mcp_manage" },
-        { id: "vectorize", href: "vectorize.html", label: "向量化文档", perm: "cap.vectorize" }
+        { id: "kb-laws", href: "admin_kb_laws.html", label: "知识库 · 法规库", perm: "cap.vectorize" },
+        { id: "kb-cases", href: "admin_kb_cases.html", label: "知识库 · 裁判案例库", perm: "cap.vectorize" },
+        { id: "vectorize", href: "vectorize.html", label: "向量调试", perm: "cap.vectorize" }
       ]
     }
   ];

@@ -72,10 +72,15 @@
           <div class="stats-value" id="statMcp">—</div>
           <div class="stats-hint" id="statMcpHint">已接入的 MCP 服务</div>
         </a>
-        <a class="stats-card" href="vectorize.html" data-page="vectorize.html">
-          <div class="stats-label">向量化文档</div>
-          <div class="stats-value" id="statDocs">—</div>
-          <div class="stats-hint" id="statDocsHint">写入向量库的文书</div>
+        <a class="stats-card" href="admin_kb_laws.html" data-page="admin_kb_laws.html">
+          <div class="stats-label">法规库</div>
+          <div class="stats-value" id="statLaws">—</div>
+          <div class="stats-hint" id="statLawsHint">含法规与案例</div>
+        </a>
+        <a class="stats-card" href="admin_kb_cases.html" data-page="admin_kb_cases.html">
+          <div class="stats-label">裁判案例库</div>
+          <div class="stats-value" id="statCasesKb">—</div>
+          <div class="stats-hint" id="statCasesKbHint">含法规与案例</div>
         </a>
       </div>
     </section>
@@ -112,15 +117,18 @@
         document.getElementById('statMcp').textContent =
           data.mcp_service_count != null ? data.mcp_service_count : '—';
         document.getElementById('statMcpHint').textContent = '已接入的 MCP 服务';
-        document.getElementById('statDocs').textContent = data.document_count;
-        let docHint = '写入向量库的文书';
+        const docCount = data.document_count != null ? data.document_count : '—';
+        document.getElementById('statLaws').textContent = docCount;
+        document.getElementById('statCasesKb').textContent = docCount;
+        let docHint = '含法规与案例';
         if (data.chunk_count != null && data.chunk_count !== data.document_count) {
           docHint += '（分块 ' + data.chunk_count + '）';
         }
         if (data.vector_error) {
           docHint = data.vector_error;
         }
-        document.getElementById('statDocsHint').textContent = docHint;
+        document.getElementById('statLawsHint').textContent = docHint;
+        document.getElementById('statCasesKbHint').textContent = docHint;
       } catch (err) {
         status.hidden = false;
         status.textContent = '无法加载统计：' + err;
