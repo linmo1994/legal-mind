@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>知识库 · 裁判案例库 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; font-size: 13px; }
+    .admin-table th { background: #f8fafc; }
+    .form-grid label { display: block; margin: 10px 0 4px; font-size: 13px; }
+    .form-grid input, .form-grid select { width: 100%; padding: 8px; box-sizing: border-box; }
+    .row-actions button { margin-right: 4px; }
+    .list-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+    .list-toolbar .btn-primary[disabled] { opacity: 0.65; cursor: not-allowed; }
+    .status-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+      background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
+    }
+    .status-pill.err { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+    .status-pill.warn { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+    .search-box { display: flex; gap: 8px; align-items: center; margin: 20px 0 8px; flex-wrap: wrap; }
+    .search-box input { flex: 1; min-width: 200px; padding: 8px 10px; box-sizing: border-box; }
+    .search-results { list-style: none; margin: 0; padding: 0; }
+    .search-results li {
+      padding: 10px 12px; margin: 0 0 8px; border: 1px solid #e5e7eb; border-radius: 8px;
+      background: #f8fafc; font-size: 13px; line-height: 1.5;
+    }
+    .search-results .sr-meta { color: #6b7280; font-size: 12px; margin-bottom: 4px; }
+    .search-results .sr-snippet { white-space: pre-wrap; word-break: break-word; color: #111827; }
+  </style>
+</head>
+<body class="admin-body" data-admin-page="kb-cases">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>知识库 · 裁判案例库</h1>
+    <p class="muted">上传裁判文书入库向量化；可编辑元数据并试检索。空字段显示为 —。</p>
+
+    <div class="list-toolbar">
+      <input type="file" id="fileInput" multiple accept=".txt,.doc,.docx,.pdf,.md,text/plain">
+      <button type="button" class="btn-primary" id="btnUpload">上传并入库</button>
+      <span class="muted" id="uploadStatus"></span>
+      <span class="muted" id="listCount" style="margin-left:auto"></span>
+    </div>
+
+    <p id="emptyHint" class="muted" hidden>暂无案例文档，请上传文件。</p>
+    <table class="admin-table" id="caseTable" style="width:100%;border-collapse:collapse;background:#fff;" hidden>
+      <thead>
+        <tr>
+          <th>案号</th>
+          <th>案由</th>
+          <th>法院</th>
+          <th>审理程序</th>
+          <th>案例类型</th>
+          <th>审判人员</th>
+          <th>状态</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="caseBody"></tbody>
+    </table>
+
+    <h2 style="font-size:16px;margin:28px 0 8px">试检索</h2>
+    <p class="muted" style="margin:0 0 8px">限定裁判案例库（doc_type=case）。</p>
+    <div class="search-box">
+      <input type="search" id="searchQuery" placeholder="输入检索关键词，例如：劳动争议 赔偿">
+      <button type="button" class="btn-primary" id="btnSearch">检索</button>
+    </div>
+    <p id="searchStatus" class="muted"></p>
+    <ul class="search-results" id="searchResults"></ul>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    const UI = window.AdminUI;
+    let base = "";
+    let docs = [];
+
+    const STATUS_LABELS = {
+      processing: "处理中",
+      ready: "就绪",
+      meta_failed: "元数据识别失败",
+      vector_failed: "向量化失败",
+      extract_failed: "文本提取失败",
+      deleted: "已删除"
+    };
+
+    const CASE_KIND_LABELS = {
+      ordinary: "普通案例",
+      guiding: "指导案例"
+    };
+
+    function dash(v) {
+      const s = v == null ? "" : String(v).trim();
+      return s ? s : "—";
+    }
+
+    function metaOf(doc) {
+      return (doc && doc.meta) || {};
+    }
+
+    function caseDisplayName(doc) {
+      const m = metaOf(doc);
+      return dash(m.case_no || m.cause_of_action || doc.title);
+    }
+
+    function caseKindLabel(code) {
+      return CASE_KIND_LABELS[code] || dash(code);
+    }
+
+    function statusLabel(code) {
+      return STATUS_LABELS[code] || code || "—";
+    }
+
+    function statusClass(code) {
+      if (code === "ready") return "status-pill";
+      if (code === "meta_failed" || code === "vector_failed" || code === "extract_failed") return "status-pill err";
+      if (code === "processing") return "status-pill warn";
+      return "status-pill";
+    }
+
+    function setUploadStatus(text) {
+      document.getElementById("uploadStatus").textContent = text || "";
+    }
+
+    async function api(path, opts) {
+      const headers = LegalMindAuth.authHeaders();
+      const o = Object.assign({}, opts || {});
+      if (o.body && typeof o.body === "string" && !o.headers) {
+        o.headers = headers;
+      } else if (!o.headers) {
+        o.headers = headers;
+      } else {
+        o.headers = Object.assign({}, headers, o.headers);
+      }
+      const resp = await fetch(base + path, o);
+      const data = await resp.json().catch(function () { return {}; });
+      if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      return data;
+    }
+
+    async function uploadFile(file) {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("description", "kb-case");
+      const headers = {};
+      const token = LegalMindAuth.getToken();
+      if (token) headers.Authorization = "Bearer " + token;
+      const resp = await fetch(base + "/api/files/upload", { method: "POST", headers: headers, body: fd });
+      const data = await resp.json().catch(function () { return {}; });
+      if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("上传失败 " + resp.status));
+      return data.file_id;
+    }
+
+    function renderList() {
+      const tbody = document.getElementById("caseBody");
+      const table = document.getElementById("caseTable");
+      const empty = document.getElementById("emptyHint");
+      document.getElementById("listCount").textContent = "共 " + docs.length + " 条";
+      tbody.innerHTML = "";
+      empty.hidden = docs.length > 0;
+      table.hidden = docs.length === 0;
+      docs.forEach(function (doc) {
+        const m = metaOf(doc);
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + UI.esc(dash(m.case_no)) + "</td>" +
+          "<td>" + UI.esc(dash(m.cause_of_action)) + "</td>" +
+          "<td>" + UI.esc(dash(m.court)) + "</td>" +
+          "<td>" + UI.esc(dash(m.procedure)) + "</td>" +
+          "<td>" + UI.esc(caseKindLabel(m.case_kind)) + "</td>" +
+          "<td>" + UI.esc(dash(m.judges)) + "</td>" +
+          '<td><span class="' + statusClass(doc.status) + '">' + UI.esc(statusLabel(doc.status)) + "</span></td>" +
+          '<td><div class="row-actions">' +
+            '<button type="button" class="btn-ghost" data-act="edit">编辑</button>' +
+            (doc.file_id
+              ? '<button type="button" class="btn-ghost" data-act="file">原文</button>'
+              : "") +
+            '<button type="button" class="btn-danger-outline" data-act="del">删除</button>' +
+          "</div></td>";
+        tr.querySelectorAll("[data-act]").forEach(function (btn) {
+          btn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            const act = btn.getAttribute("data-act");
+            if (act === "edit") openEdit(doc);
+            else if (act === "del") removeDoc(doc);
+            else if (act === "file") openFile(doc);
+          });
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadList() {
+      const data = await api("/api/admin/kb/documents?doc_type=case");
+      docs = data.items || [];
+      renderList();
+    }
+
+    function editForm(doc) {
+      const m = metaOf(doc);
+      const kind = m.case_kind === "guiding" ? "guiding" : "ordinary";
+      return '<form class="admin-form form-grid" id="caseForm">' +
+        "<label>标题</label><input id=\"fTitle\" value=\"" + UI.esc(doc.title || "") + "\">" +
+        "<label>案号</label><input id=\"fCaseNo\" value=\"" + UI.esc(m.case_no || "") + "\">" +
+        "<label>案由</label><input id=\"fCause\" value=\"" + UI.esc(m.cause_of_action || "") + "\">" +
+        "<label>法院</label><input id=\"fCourt\" value=\"" + UI.esc(m.court || "") + "\">" +
+        "<label>审理程序</label><input id=\"fProc\" value=\"" + UI.esc(m.procedure || "") + "\" placeholder=\"如：一审、二审\">" +
+        "<label>案例类型</label><select id=\"fKind\">" +
+          "<option value=\"ordinary\"" + (kind === "ordinary" ? " selected" : "") + ">普通案例</option>" +
+          "<option value=\"guiding\"" + (kind === "guiding" ? " selected" : "") + ">指导案例</option>" +
+        "</select>" +
+        "<label>审判人员</label><input id=\"fJudges\" value=\"" + UI.esc(m.judges || "") + "\" placeholder=\"多人用分号分隔\">" +
+        "</form>";
+    }
+
+    function readEditForm() {
+      const kind = document.getElementById("fKind").value;
+      return {
+        title: document.getElementById("fTitle").value.trim(),
+        meta: {
+          case_no: document.getElementById("fCaseNo").value.trim(),
+          cause_of_action: document.getElementById("fCause").value.trim(),
+          court: document.getElementById("fCourt").value.trim(),
+          procedure: document.getElementById("fProc").value.trim(),
+          case_kind: kind === "guiding" ? "guiding" : "ordinary",
+          judges: document.getElementById("fJudges").value.trim()
+        }
+      };
+    }
+
+    function openEdit(doc) {
+      UI.openDrawer({
+        title: "编辑案例元数据",
+        body: editForm(doc),
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
+          '<button type="button" class="btn-primary" id="btnSave">保存</button>',
+        onReady: function () {
+          document.getElementById("btnSave").onclick = async function () {
+            const payload = readEditForm();
+            try {
+              await api("/api/admin/kb/documents/" + encodeURIComponent(doc.id), {
+                method: "PATCH",
+                body: JSON.stringify(payload)
+              });
+              UI.toast("已保存", true);
+              UI.closeDrawer();
+              await loadList();
+            } catch (e) {
+              UI.toast(e.message, false);
+            }
+          };
+        }
+      });
+    }
+
+    function openFile(doc) {
+      if (!doc.file_id) {
+        UI.toast("无关联原文", false);
+        return;
+      }
+      const url = base + "/api/files/" + encodeURIComponent(doc.file_id) + "/download";
+      window.open(url, "_blank", "noopener");
+    }
+
+    async function removeDoc(doc) {
+      const ok = await UI.confirm({
+        title: "删除案例",
+        message: "确定删除「" + caseDisplayName(doc) + "」？将同步移除向量，此操作不可恢复。",
+        danger: true,
+        okText: "删除"
+      });
+      if (!ok) return;
+      try {
+        await api("/api/admin/kb/documents/" + encodeURIComponent(doc.id), { method: "DELETE" });
+        UI.toast("已删除", true);
+        await loadList();
+      } catch (e) {
+        UI.toast(e.message, false);
+      }
+    }
+
+    async function uploadSerial() {
+      const input = document.getElementById("fileInput");
+      const files = input && input.files ? Array.prototype.slice.call(input.files) : [];
+      if (!files.length) {
+        UI.toast("请先选择文件", false);
+        return;
+      }
+      const btn = document.getElementById("btnUpload");
+      btn.disabled = true;
+      input.disabled = true;
+      let okCount = 0;
+      try {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          const label = (i + 1) + "/" + files.length + " " + file.name;
+          setUploadStatus("上传中 " + label);
+          const fileId = await uploadFile(file);
+          setUploadStatus("识别中 / 向量化中 " + label);
+          await api("/api/admin/kb/documents", {
+            method: "POST",
+            body: JSON.stringify({ doc_type: "case", file_id: fileId })
+          });
+          okCount += 1;
+        }
+        setUploadStatus("完成：成功 " + okCount + "/" + files.length);
+        UI.toast("已入库 " + okCount + " 个文件", true);
+        input.value = "";
+        await loadList();
+      } catch (e) {
+        setUploadStatus("失败（已成功 " + okCount + "/" + files.length + "）：" + e.message);
+        UI.toast(e.message, false);
+        try { await loadList(); } catch (_) {}
+      } finally {
+        btn.disabled = false;
+        input.disabled = false;
+      }
+    }
+
+    async function runSearch() {
+      const q = document.getElementById("searchQuery").value.trim();
+      const statusEl = document.getElementById("searchStatus");
+      const list = document.getElementById("searchResults");
+      list.innerHTML = "";
+      if (!q) {
+        statusEl.textContent = "请输入检索词";
+        return;
+      }
+      statusEl.textContent = "检索中…";
+      try {
+        const data = await api("/api/admin/kb/search", {
+          method: "POST",
+          body: JSON.stringify({ doc_type: "case", query: q, n_results: 8 })
+        });
+        const results = data.results || [];
+        statusEl.textContent = results.length ? ("命中 " + results.length + " 条") : "无命中";
+        results.forEach(function (r) {
+          const md = r.metadata || {};
+          const title = md.case_no || md.cause_of_action || md.title || r.id || "—";
+          const snippet = (r.document || "").slice(0, 400);
+          const li = document.createElement("li");
+          li.innerHTML =
+            '<div class="sr-meta">' + UI.esc(title) +
+            (r.distance != null ? " · distance " + Number(r.distance).toFixed(3) : "") +
+            "</div>" +
+            '<div class="sr-snippet">' + UI.esc(snippet || "（无正文片段）") + "</div>";
+          list.appendChild(li);
+        });
+      } catch (e) {
+        statusEl.textContent = e.message;
+        UI.toast(e.message, false);
+      }
+    }
+
+    document.getElementById("btnUpload").onclick = function () { uploadSerial(); };
+    document.getElementById("btnSearch").onclick = function () { runSearch(); };
+    document.getElementById("searchQuery").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); runSearch(); }
+    });
+
+    (async function () {
+      if (!LegalMindAuth.requireLogin()) return;
+      base = await LegalMindAuth.mcpBase();
+      try {
+        await loadList();
+      } catch (e) {
+        document.getElementById("listCount").textContent = e.message;
+        UI.toast(e.message, false);
+      }
+    })();
+  </script>
+</body>
+</html>
