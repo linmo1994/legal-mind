@@ -14,6 +14,25 @@ from rbac_service import RbacService
 KbRoute = Tuple[Optional[str], Optional[str]]
 
 
+def _chroma_not_found(result: Any) -> bool:
+    """True when Chroma reports the document is missing (OK for extract_failed rows)."""
+    if not isinstance(result, dict):
+        return False
+    msg = result.get("message") or ""
+    return "未找到文档" in str(msg)
+
+
+def _chroma_hard_failure(result: Any) -> Optional[str]:
+    """Return error text if result is a non-not-found Chroma failure; else None."""
+    if not isinstance(result, dict):
+        return None
+    if result.get("success") is not False:
+        return None
+    if _chroma_not_found(result):
+        return None
+    return str(result.get("message") or result.get("error") or "向量操作失败")
+
+
 def parse_kb_path(path: str, method: str) -> KbRoute:
     """Parse /api/admin/kb routes. Path should already be stripped of query string.
 
@@ -199,17 +218,27 @@ class KbHttpApi:
                 return _deny(400, "meta 必须为对象")
             kwargs["meta"] = meta
 
+        # Chroma first, then SQLite — avoid leaving store updated if Chroma hard-fails.
+        new_title = (
+            str(title) if title is not None else (existing.get("title") or "")
+        )
+        new_meta = meta if meta is not None else dict(existing.get("meta") or {})
+        chroma_meta: Dict[str, Any] = dict(new_meta)
+        chroma_meta["title"] = new_title
+        chroma_meta["doc_type"] = existing.get("doc_type")
+        try:
+            chroma_result = self.vector_service.update_document_metadata(
+                doc_id, chroma_meta
+            )
+        except Exception as e:
+            return _deny(500, f"向量元数据更新失败: {e}")
+        hard = _chroma_hard_failure(chroma_result)
+        if hard:
+            return _deny(500, f"向量元数据更新失败: {hard}")
+
         updated = self.store.update_document(doc_id, **kwargs)
         if not updated:
             return _deny(404, "文档不存在")
-
-        chroma_meta: Dict[str, Any] = dict(updated.get("meta") or {})
-        chroma_meta["title"] = updated.get("title") or ""
-        chroma_meta["doc_type"] = updated.get("doc_type")
-        try:
-            self.vector_service.update_document_metadata(doc_id, chroma_meta)
-        except Exception as e:
-            return _deny(500, f"向量元数据更新失败: {e}")
         return _ok(updated)
 
     def delete_document(
@@ -227,10 +256,14 @@ class KbHttpApi:
             return _deny(404, "文档不存在")
 
         # Chroma first, then soft-delete — avoids soft-deleted rows left when Chroma fails.
+        # "未找到文档" is OK (e.g. extract_failed rows with no vectors).
         try:
-            self.vector_service.delete_document(doc_id)
+            chroma_result = self.vector_service.delete_document(doc_id)
         except Exception as e:
             return _deny(500, f"向量删除失败: {e}")
+        hard = _chroma_hard_failure(chroma_result)
+        if hard:
+            return _deny(500, f"向量删除失败: {hard}")
         ok = self.store.soft_delete(doc_id)
         if not ok:
             return _deny(404, "文档不存在")

@@ -36,6 +36,19 @@ class TestKbMetaExtract(unittest.TestCase):
         self.assertEqual(meta["case_kind"], "ordinary")
         self.assertEqual(meta["case_no"], "")
 
+    def test_extract_transport_error_returns_meta_failed(self):
+        def fake(system, user):
+            raise OSError("timeout")
+
+        meta, status = extract_metadata("law", "正文", complete_fn=fake)
+        self.assertEqual(status, "meta_failed")
+        self.assertEqual(meta["law_name"], "")
+        self.assertEqual(meta["effect_level"], "")
+
+    def test_invalid_doc_type_raises_before_try(self):
+        with self.assertRaises(ValueError):
+            extract_metadata("other", "正文", complete_fn=lambda s, u: "{}")
+
 
 if __name__ == "__main__":
     unittest.main()

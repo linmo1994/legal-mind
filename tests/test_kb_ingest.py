@@ -57,6 +57,26 @@ class TestKbIngest(unittest.TestCase):
         )
         self.assertEqual(doc["status"], "extract_failed")
 
+    def test_ingest_llm_transport_error_still_vectorizes(self):
+        def boom(system, user):
+            raise OSError("timeout")
+
+        doc = ingest_uploaded_file(
+            doc_type="law",
+            file_id="f1",
+            created_by="u1",
+            kb_store=self.kb,
+            file_service=self.files,
+            vector_service=self.vs,
+            complete_fn=boom,
+        )
+        self.assertEqual(doc["status"], "meta_failed")
+        self.assertEqual(doc["meta"].get("law_name"), "")
+        hits = self.vs.search(
+            "劳动合同法", n_results=3, boost_keywords=False, where={"doc_type": "law"}
+        )
+        self.assertTrue(any(h["metadata"]["document_id"] == doc["id"] for h in hits))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -84,6 +84,52 @@ class TestHttpKbApi(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(search2["results"], [])
 
+    def test_delete_chroma_hard_failure_skips_soft_delete(self):
+        st, body = self.api.create_from_file(self.authz, {"doc_type": "law", "file_id": "f1"})
+        self.assertEqual(st, 200, body)
+        doc_id = body["id"]
+
+        def fail_delete(_doc_id):
+            return {"success": False, "message": "chroma unavailable"}
+
+        self.api.vector_service.delete_document = fail_delete
+        st, err = self.api.delete_document(self.authz, doc_id)
+        self.assertEqual(st, 500, err)
+        still = self.kb.get_document(doc_id)
+        self.assertIsNotNone(still)
+        self.assertNotEqual(still["status"], "deleted")
+
+    def test_delete_chroma_not_found_still_soft_deletes(self):
+        doc = self.kb.create_document(
+            id="kb_law_noforce",
+            doc_type="law",
+            file_id="f-empty",
+            title="extract failed row",
+            status="extract_failed",
+            meta={},
+            created_by="u1",
+        )
+        st, out = self.api.delete_document(self.authz, doc["id"])
+        self.assertEqual(st, 200, out)
+        self.assertIsNone(self.kb.get_document(doc["id"]))
+
+    def test_patch_chroma_hard_failure_leaves_store_unchanged(self):
+        st, body = self.api.create_from_file(self.authz, {"doc_type": "law", "file_id": "f1"})
+        self.assertEqual(st, 200, body)
+        doc_id = body["id"]
+        before = self.kb.get_document(doc_id)
+
+        def fail_update(_doc_id, _meta):
+            return {"success": False, "message": "chroma write error"}
+
+        self.api.vector_service.update_document_metadata = fail_update
+        st, err = self.api.patch_document(
+            self.authz, doc_id, {"meta": {**body["meta"], "effect_level": "行政法规"}}
+        )
+        self.assertEqual(st, 500, err)
+        after = self.kb.get_document(doc_id)
+        self.assertEqual(after["meta"]["effect_level"], before["meta"]["effect_level"])
+
 
 if __name__ == "__main__":
     unittest.main()

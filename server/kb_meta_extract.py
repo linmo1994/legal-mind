@@ -115,5 +115,6 @@ def extract_metadata(
         response = complete_fn(system, body)
         raw = parse_json_object(response)
         return normalize(raw), "ready"
-    except (ValueError, RuntimeError, json.JSONDecodeError, TypeError, KeyError):
+    except Exception:
+        # Transport / HTTP / OS errors (and parse failures) degrade to empty meta.
         return normalize({}), "meta_failed"
