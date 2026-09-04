@@ -499,6 +499,34 @@ class VectorService:
             return {
                 "error": str(e)
             }
+
+    def count_documents(self) -> Dict:
+        """Count unique source documents vs stored chunks."""
+        info = self.get_collection_info()
+        if info.get("error"):
+            return {"document_count": 0, "chunk_count": 0, "error": info["error"]}
+        chunk_count = int(info.get("document_count") or 0)
+        unique_ids = set()
+        try:
+            results = self.collection.get(include=["metadatas"])
+            for meta in results.get("metadatas") or []:
+                if isinstance(meta, dict) and meta.get("document_id"):
+                    unique_ids.add(meta["document_id"])
+        except Exception as e:
+            return {
+                "document_count": chunk_count,
+                "chunk_count": chunk_count,
+                "error": str(e),
+            }
+        if unique_ids:
+            return {
+                "document_count": len(unique_ids),
+                "chunk_count": chunk_count,
+            }
+        return {
+            "document_count": chunk_count,
+            "chunk_count": chunk_count,
+        }
     
     def list_documents(self, limit: int = 10) -> Dict:
         """

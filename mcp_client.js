@@ -4215,7 +4215,8 @@ async function loadActiveCaseOptions() {
   (data.cases || []).forEach(function (c) {
     const opt = document.createElement('option');
     opt.value = String(c.id);
-    opt.textContent = (c.case_no || '') + ' · ' + (c.title || '');
+    opt.textContent = (c.case_no || '') + ' · ' + (c.title || '') +
+      (c.status_label ? ('（' + c.status_label + '）') : '');
     if (current != null && String(current) === String(c.id)) opt.selected = true;
     sel.appendChild(opt);
   });

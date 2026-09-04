@@ -8,32 +8,78 @@
 </head>
 <body>
   <header class="navbar">
-    <div class="logo"></div>
+    <div class="logo">LegalMind</div>
     <nav class="nav-links">
-      <button onclick="loadPage('vectorize.html')">向量化文档</button>
+      <button type="button" id="navLoginBtn" hidden>登录</button>
+      <button type="button" id="navAdminBtn" hidden>管理后台</button>
+      <span id="navUserLabel" class="nav-user" hidden></span>
+      <button type="button" id="navLogoutBtn" hidden>退出</button>
     </nav>
   </header>
   <main>
     <iframe id="mainFrame" src="home.html" frameborder="0"></iframe>
   </main>
+  <script src="auth.js"></script>
   <script>
-    // 添加消息监听器，避免浏览器扩展通信错误
-    // 当页面包含iframe时，某些扩展会尝试通信，如果没有监听器会导致错误
     window.addEventListener('message', function(event) {
-      // 忽略来自浏览器扩展的消息（避免 "Receiving end does not exist" 错误）
       if (event.origin && event.origin.startsWith('chrome-extension://')) {
         return;
       }
-      // 可以在这里处理来自iframe的消息（如果需要）
       if (event.data && event.data.type) {
         console.log('收到来自iframe的消息:', event.data);
       }
     }, false);
-    
+
     function loadPage(page) {
       const sep = page.includes('?') ? '&' : '?';
       document.getElementById('mainFrame').src = page + sep + 't=' + Date.now();
+      syncShellNav();
+    }
+    window.loadPage = loadPage;
+
+    function canOpenAdmin() {
+      if (!window.LegalMindAuth || !LegalMindAuth.getToken()) return false;
+      return LegalMindAuth.hasPerm('page.admin')
+        || LegalMindAuth.hasPerm('cap.user_manage')
+        || LegalMindAuth.hasPerm('cap.case_manage')
+        || LegalMindAuth.hasPerm('cap.role_manage');
+    }
+
+    function syncShellNav() {
+      const loginBtn = document.getElementById('navLoginBtn');
+      const adminBtn = document.getElementById('navAdminBtn');
+      const logoutBtn = document.getElementById('navLogoutBtn');
+      const userLabel = document.getElementById('navUserLabel');
+      const loggedIn = !!(window.LegalMindAuth && LegalMindAuth.getToken());
+      loginBtn.hidden = loggedIn;
+      logoutBtn.hidden = !loggedIn;
+      adminBtn.hidden = !canOpenAdmin();
+      if (loggedIn) {
+        const s = LegalMindAuth.getSession();
+        const name = (s && s.user && (s.user.display_name || s.user.username)) || '';
+        userLabel.hidden = !name;
+        userLabel.textContent = name;
+      } else {
+        userLabel.hidden = true;
+        userLabel.textContent = '';
+      }
+    }
+
+    document.getElementById('navLoginBtn').onclick = function () {
+      loadPage('login.html?next=home.html');
+    };
+    document.getElementById('navAdminBtn').onclick = function () {
+      loadPage('admin.html');
+    };
+    document.getElementById('navLogoutBtn').onclick = async function () {
+      if (window.LegalMindAuth) await LegalMindAuth.logout();
+      syncShellNav();
+      loadPage('home.html');
+    };
+    syncShellNav();
+    if (window.LegalMindAuth && LegalMindAuth.getToken()) {
+      LegalMindAuth.fetchMe().then(syncShellNav).catch(syncShellNav);
     }
   </script>
 </body>
-</html> 
+</html>

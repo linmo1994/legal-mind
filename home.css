@@ -174,17 +174,17 @@ body::before {
 
 .header-content {
   display: grid !important;
-  grid-template-columns: auto 1fr !important;
+  grid-template-columns: minmax(140px, auto) 1fr minmax(140px, auto) !important;
   align-items: center;
   max-width: 1200px;
   margin: 0 auto;
   position: relative;
   z-index: 1;
   width: 100% !important;
-  gap: 20px;
+  gap: 16px;
   visibility: visible !important;
   opacity: 1 !important;
-  padding: 0;
+  padding: 0 8px;
 }
 
 .header-title-section {
@@ -194,11 +194,11 @@ body::before {
   z-index: 1;
 }
 
-/* 历史记录Tab放在左侧顶部，与"向量化文档"按钮同一高度 */
-.history-tab {
-  grid-column: 1;
+/* 历史记录：标题行左侧，与右侧管理后台对等 */
+.history-tab,
+.admin-tab {
   justify-self: start;
-  align-self: start;
+  align-self: center;
   display: flex !important;
   align-items: center;
   gap: 8px;
@@ -211,67 +211,87 @@ body::before {
   font-size: 1rem;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.3s ease;
-  position: absolute;
-  top: 0;
-  left: 0;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  position: relative;
   z-index: 10 !important;
   visibility: visible !important;
   opacity: 1 !important;
   min-width: 120px;
   margin: 0 !important;
-  /* 与index.html的navbar对齐：navbar高度64px，padding 0 32px，按钮padding 8px 16px */
-  /* 所以历史记录Tab应该在顶部，left: 32px，top: (64px - 按钮高度) / 2 = 约20px */
-  /* 但由于home-header有自己的padding，需要调整 */
-  margin-top: 20px !important;
-  margin-left: 32px !important;
 }
 
-.history-tab:hover {
+.history-tab {
+  grid-column: 1;
+}
+
+.admin-tab {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.admin-tab[hidden] {
+  display: none !important;
+}
+
+.history-tab:hover,
+.admin-tab:hover {
   background: rgba(255, 255, 255, 0.25);
   border-color: rgba(255, 255, 255, 0.3);
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.history-tab:active {
-  transform: translateY(0);
+.history-tab:active,
+.admin-tab:active {
+  transform: none;
 }
 
-.history-tab svg {
+.history-tab svg,
+.admin-tab svg {
   width: 24px;
   height: 24px;
   flex-shrink: 0;
 }
 
-.history-tab-text {
+.history-tab-text,
+.admin-tab-text {
   white-space: nowrap;
 }
 
 /* 移动端适配 */
 @media (max-width: 768px) {
   .header-content {
-    grid-template-columns: 1fr;
-    gap: 20px;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
   }
   
   .header-title-section {
-    grid-column: 1;
+    grid-column: 1 / -1;
     text-align: center;
+    order: -1;
   }
   
   .history-tab {
-    position: absolute;
-    top: 0;
-    left: 0;
+    position: relative;
+    top: auto;
+    left: auto;
+    right: auto;
+    grid-column: 1;
+    margin: 0 !important;
     padding: 8px 12px;
     font-size: 0.9rem;
+    min-width: 0;
+  }
+
+  .admin-tab {
+    grid-column: 2;
+    justify-self: end;
     margin: 0 !important;
-    margin-top: 12px !important;
-    margin-left: 15px !important;
+    padding: 8px 12px;
+    font-size: 0.9rem;
+    min-width: 0;
   }
   
-  .history-tab svg {
+  .history-tab svg,
+  .admin-tab svg {
     width: 20px;
     height: 20px;
   }

@@ -2,11 +2,53 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from auth_service import AuthService
 from rbac_service import RbacService
-from rbac_store import CASE_TRACK_ROLES, RbacStore
+from rbac_store import (
+    ACCOUNT_STATUS_ACTIVE,
+    ACCOUNT_STATUS_CODES,
+    CASE_CONTRACT_FILE_MAX,
+    CASE_EVIDENCE_FILE_MAX,
+    CASE_STATUS_ASSIGNED,
+    CASE_STATUS_CODES,
+    CASE_STATUSES,
+    CASE_TRACK_ROLES,
+    CASE_TYPE_CODES,
+    CASE_TYPES,
+    CLIENT_TYPE_CODES,
+    CLIENT_TYPES,
+    FIRM_TRACK_ROLES,
+    RbacStore,
+    normalize_account_status,
+)
+
+
+def _normalize_file_ids(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raw = [raw]
+    out: List[str] = []
+    seen = set()
+    for x in raw:
+        s = str(x).strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _validate_case_file_limits(
+    contract_ids: List[str], evidence_ids: List[str]
+) -> Optional[str]:
+    if len(contract_ids) > CASE_CONTRACT_FILE_MAX:
+        return f"委托合同最多上传 {CASE_CONTRACT_FILE_MAX} 份文件"
+    if len(evidence_ids) > CASE_EVIDENCE_FILE_MAX:
+        return f"证据材料最多上传 {CASE_EVIDENCE_FILE_MAX} 份文件"
+    return None
 
 StatusPayload = Tuple[int, Dict[str, Any]]
 
@@ -111,6 +153,8 @@ class RbacHttpApi:
                     "display_name": u["display_name"],
                     "roles": roles,
                     "is_active": bool(u.get("is_active")),
+                    "account_status": u.get("account_status") or ACCOUNT_STATUS_ACTIVE,
+                    "account_status_label": u.get("account_status_label") or "启动",
                 })
             return _ok({"users": users})
         users = []
@@ -128,18 +172,33 @@ class RbacHttpApi:
             return gated
         username = (body.get("username") or "").strip()
         password = body.get("password") or ""
-        display_name = (body.get("display_name") or username).strip()
+        display_name = (body.get("display_name") or body.get("name") or username).strip()
         role_codes = body.get("roles") or body.get("role_codes") or []
+        if isinstance(role_codes, str):
+            role_codes = [role_codes] if role_codes else []
+        role_codes = [c for c in role_codes if c]
         if not username or not password:
-            return _deny(400, "username 与 password 必填")
+            return _deny(400, "账号与密码必填")
+        if not display_name:
+            return _deny(400, "姓名必填")
         if self.store.get_user_by_username(username):
             return _deny(409, "用户名已存在")
+        bad = [c for c in role_codes if c not in FIRM_TRACK_ROLES]
+        if bad:
+            return _deny(400, "所级角色仅支持律所主任或行政主管")
+        status = normalize_account_status(
+            body.get("account_status"),
+            bool(body["is_active"]) if "is_active" in body else None,
+        )
+        if status not in ACCOUNT_STATUS_CODES:
+            return _deny(400, "无效的账号状态")
         try:
             user = self.store.create_user(
                 username,
                 self.auth.hash_password(password),
                 display_name=display_name,
                 must_change_password=bool(body.get("must_change_password", True)),
+                account_status=status,
             )
             if role_codes:
                 self.store.set_user_roles(user["id"], list(role_codes))
@@ -156,8 +215,22 @@ class RbacHttpApi:
         user = self.store.get_user_by_id(user_id)
         if not user:
             return _deny(404, "用户不存在")
-        if "is_active" in body:
-            self.store.set_user_active(user_id, bool(body["is_active"]))
+        display_name = body.get("display_name") if "display_name" in body else body.get("name")
+        if "account_status" in body or "is_active" in body or display_name is not None:
+            status = None
+            if "account_status" in body:
+                status = normalize_account_status(body.get("account_status"))
+                if status not in ACCOUNT_STATUS_CODES:
+                    return _deny(400, "无效的账号状态")
+            try:
+                self.store.update_user_profile(
+                    user_id,
+                    display_name=display_name.strip() if isinstance(display_name, str) else display_name,
+                    account_status=status,
+                    is_active=bool(body["is_active"]) if "is_active" in body and status is None else None,
+                )
+            except ValueError as exc:
+                return _deny(400, str(exc))
         if body.get("password"):
             self.store.update_password_hash(
                 user_id,
@@ -166,6 +239,12 @@ class RbacHttpApi:
             )
         if "roles" in body or "role_codes" in body:
             codes = body.get("roles") or body.get("role_codes") or []
+            if isinstance(codes, str):
+                codes = [codes] if codes else []
+            codes = [c for c in codes if c]
+            bad = [c for c in codes if c not in FIRM_TRACK_ROLES]
+            if bad:
+                return _deny(400, "所级角色仅支持律所主任或行政主管")
             try:
                 self.store.set_user_roles(user_id, list(codes))
             except ValueError as exc:
@@ -177,6 +256,8 @@ class RbacHttpApi:
             "username": updated["username"],
             "display_name": updated["display_name"],
             "is_active": bool(updated["is_active"]),
+            "account_status": updated.get("account_status"),
+            "account_status_label": updated.get("account_status_label"),
             "must_change_password": bool(updated["must_change_password"]),
             "roles": self.store.list_user_role_codes(user_id),
         }
@@ -253,22 +334,143 @@ class RbacHttpApi:
             # directors with case_manage but mine=1 still see only membership — if none, show all when can_all and not mine
         else:
             cases = self.store.list_cases_for_user(user["id"], all_cases=True)
-        return _ok({"cases": cases})
+        return _ok({
+            "cases": cases,
+            "case_statuses": [{"code": c, "label": lab} for c, lab in CASE_STATUSES],
+            "case_types": [
+                {"code": c, "label": lab, "abbr": abbr} for c, lab, abbr in CASE_TYPES
+            ],
+        })
+
+    def preview_case_no(self, authorization: Optional[str], case_type: str) -> StatusPayload:
+        gated = self.require_perm(authorization, "cap.case_manage")
+        if gated[0] != 200:
+            return gated
+        case_type = (case_type or "").strip()
+        if case_type not in CASE_TYPE_CODES:
+            return _deny(400, "无效的案件类型")
+        try:
+            case_no = self.store.next_case_no(case_type)
+        except ValueError as exc:
+            return _deny(400, str(exc))
+        return _ok({"case_no": case_no, "case_type": case_type})
 
     def create_case(self, authorization: Optional[str], body: Dict[str, Any]) -> StatusPayload:
         gated = self.require_perm(authorization, "cap.case_manage")
         if gated[0] != 200:
             return gated
+        if not self.rbac.require(gated[1]["user"]["id"], "cap.case_assign"):
+            return _deny(403, "无权限：cap.case_assign")
         user = gated[1]["user"]
-        case_no = (body.get("case_no") or "").strip()
         title = (body.get("title") or "").strip()
-        if not case_no or not title:
-            return _deny(400, "case_no 与 title 必填")
+        case_type = (body.get("case_type") or "").strip()
+        case_no = (body.get("case_no") or "").strip()
+        if not title:
+            return _deny(400, "标题必填")
+        if case_type not in CASE_TYPE_CODES:
+            return _deny(400, "请选择案件类型：民事、刑事、行政、执行")
+
+        # Prefer structured fields; also accept members: [{user_id, role_code}, ...]
+        # 助理可选；合伙人、主办律师必填
+        role_user: Dict[str, Any] = {
+            "partner": body.get("partner_user_id"),
+            "lead_lawyer": body.get("lead_lawyer_user_id"),
+            "assistant": body.get("assistant_user_id"),
+        }
+        for item in body.get("members") or []:
+            code = item.get("role_code") or item.get("role")
+            if code in role_user and item.get("user_id"):
+                role_user[code] = item.get("user_id")
+
+        required_missing = [k for k in ("partner", "lead_lawyer") if not role_user.get(k)]
+        if required_missing:
+            labels = {"partner": "合伙人", "lead_lawyer": "主办律师"}
+            names = "、".join(labels[m] for m in required_missing)
+            return _deny(400, f"新建案件须同时分配：{names}")
+
         try:
-            case = self.store.create_case(case_no, title, created_by=user["id"])
+            partner_id = int(role_user["partner"])
+            lead_id = int(role_user["lead_lawyer"])
+        except (TypeError, ValueError):
+            return _deny(400, "分案用户 ID 无效")
+        if partner_id == lead_id:
+            return _deny(400, "合伙人与主办律师必须是不同用户")
+
+        assistant_id: Optional[int] = None
+        if role_user.get("assistant") not in (None, ""):
+            try:
+                assistant_id = int(role_user["assistant"])
+            except (TypeError, ValueError):
+                return _deny(400, "助理用户 ID 无效")
+            if assistant_id in (partner_id, lead_id):
+                return _deny(400, "助理不能与合伙人或主办律师为同一人")
+
+        try:
+            if not case_no:
+                case_no = self.store.next_case_no(case_type)
+            contract_ids = _normalize_file_ids(body.get("contract_file_ids"))
+            evidence_ids = _normalize_file_ids(body.get("evidence_file_ids"))
+            limit_err = _validate_case_file_limits(contract_ids, evidence_ids)
+            if limit_err:
+                return _deny(400, limit_err)
+            meta = {
+                "case_type": case_type,
+                "contract_file_ids": contract_ids,
+                "evidence_file_ids": evidence_ids,
+            }
+            case = self.store.create_case(
+                case_no,
+                title,
+                created_by=user["id"],
+                status=CASE_STATUS_ASSIGNED,
+                meta_json=json.dumps(meta, ensure_ascii=False),
+            )
         except Exception as exc:
             return _deny(400, f"创建案件失败: {exc}")
-        return _ok({"case": case}, 201)
+
+        client_ids_raw = body.get("client_ids") or []
+        if not isinstance(client_ids_raw, list):
+            client_ids_raw = [client_ids_raw] if client_ids_raw else []
+        try:
+            client_ids = [int(x) for x in client_ids_raw if str(x).strip()]
+            clients = self.store.set_case_clients(case["id"], client_ids) if client_ids else []
+        except (TypeError, ValueError) as exc:
+            try:
+                self.store.delete_case(case["id"])
+            except Exception:
+                pass
+            return _deny(400, str(exc))
+
+        assigned = []
+        try:
+            assignments = [
+                ("partner", partner_id),
+                ("lead_lawyer", lead_id),
+            ]
+            if assistant_id is not None:
+                assignments.append(("assistant", assistant_id))
+            for role_code, uid in assignments:
+                member = self.store.add_case_member(
+                    case["id"], uid, role_code, assigned_by=user["id"]
+                )
+                assigned.append(member)
+        except ValueError as exc:
+            # best-effort cleanup
+            try:
+                self.store.delete_case(case["id"])
+            except Exception:
+                pass
+            return _deny(400, str(exc))
+
+        return _ok(
+            {
+                "case": case,
+                "members": assigned,
+                "clients": clients,
+                "case_statuses": [{"code": c, "label": lab} for c, lab in CASE_STATUSES],
+            },
+            201,
+        )
 
     def get_case(self, authorization: Optional[str], case_id: int) -> StatusPayload:
         gated = self.require_user(authorization)
@@ -282,21 +484,94 @@ class RbacHttpApi:
         member = self.store.get_case_member(case_id, user["id"])
         if not can_all and not member:
             return _deny(403, "无权查看该案件")
-        return _ok({"case": case, "members": self.store.list_case_members(case_id)})
+        return _ok({
+            "case": case,
+            "members": self.store.list_case_members(case_id),
+            "clients": self.store.list_case_clients(case_id),
+        })
 
     def update_case(self, authorization: Optional[str], case_id: int, body: Dict[str, Any]) -> StatusPayload:
         gated = self.require_perm(authorization, "cap.case_manage")
         if gated[0] != 200:
             return gated
-        case = self.store.update_case(
-            case_id,
-            title=body.get("title"),
-            status=body.get("status"),
-            case_no=body.get("case_no"),
-        )
+        case = self.store.get_case(case_id)
         if not case:
             return _deny(404, "案件不存在")
-        return _ok({"case": case})
+        if body.get("status") is not None and body.get("status") not in CASE_STATUS_CODES:
+            return _deny(400, "无效的案件状态")
+
+        meta = dict(case.get("meta") or {})
+        meta_changed = False
+        if "case_type" in body and body.get("case_type"):
+            ctype = str(body.get("case_type")).strip()
+            if ctype not in CASE_TYPE_CODES:
+                return _deny(400, "无效的案件类型")
+            meta["case_type"] = ctype
+            meta_changed = True
+        if "contract_file_ids" in body:
+            meta["contract_file_ids"] = _normalize_file_ids(body.get("contract_file_ids"))
+            meta_changed = True
+        if "evidence_file_ids" in body:
+            meta["evidence_file_ids"] = _normalize_file_ids(body.get("evidence_file_ids"))
+            meta_changed = True
+        if "append_contract_file_ids" in body:
+            cur = _normalize_file_ids(meta.get("contract_file_ids"))
+            for s in _normalize_file_ids(body.get("append_contract_file_ids")):
+                if s not in cur:
+                    cur.append(s)
+            meta["contract_file_ids"] = cur
+            meta_changed = True
+        if "append_evidence_file_ids" in body:
+            cur = _normalize_file_ids(meta.get("evidence_file_ids"))
+            for s in _normalize_file_ids(body.get("append_evidence_file_ids")):
+                if s not in cur:
+                    cur.append(s)
+            meta["evidence_file_ids"] = cur
+            meta_changed = True
+
+        limit_err = _validate_case_file_limits(
+            _normalize_file_ids(meta.get("contract_file_ids")),
+            _normalize_file_ids(meta.get("evidence_file_ids")),
+        )
+        if limit_err:
+            return _deny(400, limit_err)
+
+        try:
+            case = self.store.update_case(
+                case_id,
+                title=body.get("title"),
+                status=body.get("status"),
+                case_no=body.get("case_no"),
+                meta_json=json.dumps(meta, ensure_ascii=False) if meta_changed else None,
+            )
+        except ValueError as exc:
+            return _deny(400, str(exc))
+        if not case:
+            return _deny(404, "案件不存在")
+
+        clients = self.store.list_case_clients(case_id)
+        if "client_ids" in body:
+            raw = body.get("client_ids") or []
+            if not isinstance(raw, list):
+                raw = [raw] if raw else []
+            try:
+                clients = self.store.set_case_clients(case_id, [int(x) for x in raw if str(x).strip()])
+            except (TypeError, ValueError) as exc:
+                return _deny(400, str(exc))
+
+        return _ok({
+            "case": case,
+            "members": self.store.list_case_members(case_id),
+            "clients": clients,
+        })
+
+    def delete_case(self, authorization: Optional[str], case_id: int) -> StatusPayload:
+        gated = self.require_perm(authorization, "cap.case_manage")
+        if gated[0] != 200:
+            return gated
+        if not self.store.delete_case(case_id):
+            return _deny(404, "案件不存在")
+        return _ok({"ok": True})
 
     def add_member(self, authorization: Optional[str], case_id: int, body: Dict[str, Any]) -> StatusPayload:
         gated = self.require_perm(authorization, "cap.case_assign")
@@ -322,6 +597,65 @@ class RbacHttpApi:
         if gated[0] != 200:
             return gated
         self.store.remove_case_member(case_id, user_id)
+        return _ok({"ok": True})
+
+    def list_clients(self, authorization: Optional[str]) -> StatusPayload:
+        gated = self.require_perm(authorization, "cap.case_manage")
+        if gated[0] != 200:
+            return gated
+        return _ok({
+            "clients": self.store.list_clients(),
+            "client_types": [{"code": c, "label": lab} for c, lab in CLIENT_TYPES],
+        })
+
+    def get_client(self, authorization: Optional[str], client_id: int) -> StatusPayload:
+        gated = self.require_perm(authorization, "cap.case_manage")
+        if gated[0] != 200:
+            return gated
+        client = self.store.get_client(client_id)
+        if not client:
+            return _deny(404, "客户不存在")
+        return _ok({"client": client})
+
+    def create_client(self, authorization: Optional[str], body: Dict[str, Any]) -> StatusPayload:
+        gated = self.require_perm(authorization, "cap.case_manage")
+        if gated[0] != 200:
+            return gated
+        user = gated[1]["user"]
+        try:
+            client = self.store.create_client(
+                name=(body.get("name") or "").strip(),
+                client_type=(body.get("client_type") or "").strip(),
+                id_number=(body.get("id_number") or "").strip(),
+                created_by=user["id"],
+            )
+        except ValueError as exc:
+            return _deny(400, str(exc))
+        return _ok({"client": client}, 201)
+
+    def update_client(self, authorization: Optional[str], client_id: int, body: Dict[str, Any]) -> StatusPayload:
+        gated = self.require_perm(authorization, "cap.case_manage")
+        if gated[0] != 200:
+            return gated
+        try:
+            client = self.store.update_client(
+                client_id,
+                name=body.get("name"),
+                client_type=body.get("client_type"),
+                id_number=body.get("id_number"),
+            )
+        except ValueError as exc:
+            return _deny(400, str(exc))
+        if not client:
+            return _deny(404, "客户不存在")
+        return _ok({"client": client})
+
+    def delete_client(self, authorization: Optional[str], client_id: int) -> StatusPayload:
+        gated = self.require_perm(authorization, "cap.case_manage")
+        if gated[0] != 200:
+            return gated
+        if not self.store.delete_client(client_id):
+            return _deny(404, "客户不存在")
         return _ok({"ok": True})
 
     def check_orchestrate_access(

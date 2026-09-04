@@ -9,7 +9,25 @@
     .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; font-size: 14px; }
     .admin-table th { background: #f8fafc; }
     .form-grid label { display: block; margin: 10px 0 4px; font-size: 13px; }
-    .form-grid input[type=text], .form-grid input[type=password] { width: 100%; padding: 8px; box-sizing: border-box; }
+    .form-grid input[type=text],
+    .form-grid input[type=password],
+    .form-grid select { width: 100%; padding: 8px; box-sizing: border-box; }
+    .pass-row { display: flex; gap: 8px; align-items: center; }
+    .pass-row input { flex: 1; min-width: 0; }
+    .pass-default-tab {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      background: #f8fafc;
+      color: #1a4a6e;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .pass-default-tab:hover { border-color: #1a4a6e; background: #fff; }
+    .pass-default-tab:focus-visible { outline: 2px solid #2c6a9e; outline-offset: 2px; }
+    .pass-hint { margin: 4px 0 0; font-size: 12px; color: #6b7280; }
   </style>
 </head>
 <body class="admin-body" data-admin-page="users">
@@ -17,11 +35,11 @@
     <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
     <div id="adminSubnav"></div>
     <h1>用户管理</h1>
-    <p class="muted">创建账号并分配所级角色（主任 / 行政主管）。办案角色通过「案件」分案指定。</p>
+    <p class="muted">软件登录账号。委托客户请到「案件管理 · 客户」维护。</p>
     <p id="status" class="muted"></p>
     <button type="button" class="btn-primary" id="btnNew">新建用户</button>
     <table class="admin-table" id="tbl" style="width:100%;margin-top:12px;border-collapse:collapse;background:#fff;">
-      <thead><tr><th>用户名</th><th>姓名</th><th>所级角色</th><th>状态</th><th></th></tr></thead>
+      <thead><tr><th>账号</th><th>姓名</th><th>所级角色</th><th>账号状态</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -30,7 +48,19 @@
   <script src="admin_ui.js"></script>
   <script>
     let base = "";
-    const FIRM = [["director","律所主任"],["admin_officer","行政主管"]];
+    const FIRM = [
+      ["", "无（办案人员）"],
+      ["director", "律所主任"],
+      ["admin_officer", "行政主管"]
+    ];
+    const STATUSES = [
+      ["active", "启动"],
+      ["locked", "锁定"],
+      ["resigned", "离职"]
+    ];
+    const DEFAULT_PASSWORD = "ChangeMe123!";
+    const ROLE_LABEL = { director: "律所主任", admin_officer: "行政主管" };
+
     async function api(path, opts) {
       const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
       const data = await resp.json().catch(function(){return {};});
@@ -38,20 +68,47 @@
       if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
       return data;
     }
-    function roleChecks(selected) {
-      return FIRM.map(function (r) {
-        const on = (selected || []).indexOf(r[0]) >= 0;
-        return '<label><input type="checkbox" name="role" value="' + r[0] + '"' + (on ? " checked" : "") + "> " + r[1] + "</label>";
-      }).join("");
+
+    function firmRoleOf(user) {
+      const roles = (user && user.roles) || [];
+      if (roles.indexOf("director") >= 0) return "director";
+      if (roles.indexOf("admin_officer") >= 0) return "admin_officer";
+      return "";
     }
+
+    function roleSelect(selected) {
+      return '<label>所级角色</label><select id="f_role">' +
+        FIRM.map(function (r) {
+          return '<option value="' + r[0] + '"' + (selected === r[0] ? " selected" : "") + ">" + r[1] + "</option>";
+        }).join("") + "</select>";
+    }
+
+    function statusSelect(selected) {
+      const cur = selected || "active";
+      return '<label class="req">账号状态</label><select id="f_status">' +
+        STATUSES.map(function (s) {
+          return '<option value="' + s[0] + '"' + (cur === s[0] ? " selected" : "") + ">" + s[1] + "</option>";
+        }).join("") + "</select>";
+    }
+
+    function roleLabel(roles) {
+      const firm = (roles || []).filter(function (c) { return ROLE_LABEL[c]; });
+      if (!firm.length) return "无（办案人员）";
+      return firm.map(function (c) { return ROLE_LABEL[c]; }).join("、");
+    }
+
     async function load() {
       const data = await api("/api/admin/users");
       const tb = document.querySelector("#tbl tbody");
       tb.innerHTML = "";
       data.users.forEach(function (u) {
         const tr = document.createElement("tr");
+        const statusText = u.account_status_label ||
+          (u.account_status === "locked" ? "锁定" :
+            u.account_status === "resigned" ? "离职" :
+              (u.is_active ? "启动" : "锁定"));
         tr.innerHTML = "<td>" + AdminUI.esc(u.username) + "</td><td>" + AdminUI.esc(u.display_name) +
-          "</td><td>" + AdminUI.esc((u.roles||[]).join(", ")) + "</td><td>" + (u.is_active ? "启用" : "停用") + "</td><td></td>";
+          "</td><td>" + AdminUI.esc(roleLabel(u.roles)) + "</td><td>" + AdminUI.esc(statusText) + "</td><td></td>";
         const btn = document.createElement("button");
         btn.type = "button"; btn.className = "btn-ghost"; btn.textContent = "编辑";
         btn.onclick = function () { editUser(u); };
@@ -59,32 +116,62 @@
         tb.appendChild(tr);
       });
     }
+
     function editUser(u) {
       const isNew = !u;
+      const status = (u && (u.account_status || (u.is_active ? "active" : "locked"))) || "active";
       AdminUI.openDrawer({
         title: isNew ? "新建用户" : "编辑用户",
         body: '<div class="form-grid">' +
-          '<label>用户名</label><input id="f_user" ' + (isNew ? "" : "disabled") + ' value="' + AdminUI.esc(u && u.username || "") + '">' +
-          '<label>显示名</label><input id="f_name" value="' + AdminUI.esc(u && u.display_name || "") + '">' +
-          '<label>密码' + (isNew ? "" : "（留空不改）") + '</label><input id="f_pass" type="password">' +
-          '<div>' + roleChecks(u && u.roles) + "</div>" +
-          (isNew ? "" : '<label><input id="f_active" type="checkbox"' + (u.is_active ? " checked" : "") + "> 启用</label>") +
+          '<p class="form-legend">标有 * 的为必填项</p>' +
+          '<label class="req">姓名</label><input id="f_name" value="' + AdminUI.esc(u && u.display_name || "") + '">' +
+          '<label class="req">账号</label><input id="f_user" ' + (isNew ? "" : "disabled") + ' value="' + AdminUI.esc(u && u.username || "") + '">' +
+          '<label' + (isNew ? ' class="req"' : "") + '>密码' + (isNew ? "" : "（留空不改）") + '</label>' +
+          '<div class="pass-row">' +
+            '<input id="f_pass" type="password">' +
+            '<button type="button" class="pass-default-tab" id="f_default_pass">默认密码</button>' +
+          '</div>' +
+          '<p class="pass-hint" id="f_pass_hint" hidden></p>' +
+          roleSelect(firmRoleOf(u)) +
+          statusSelect(status) +
           "</div>",
         footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
           '<button type="button" class="btn-primary" id="f_save">保存</button>',
         onReady: function () {
+          document.getElementById("f_default_pass").onclick = function () {
+            const input = document.getElementById("f_pass");
+            input.type = "text";
+            input.value = DEFAULT_PASSWORD;
+            const hint = document.getElementById("f_pass_hint");
+            hint.hidden = false;
+            hint.textContent = "已填入默认密码 " + DEFAULT_PASSWORD + "（首次登录建议修改）";
+            input.focus();
+            input.select();
+          };
           document.getElementById("f_save").onclick = async function () {
             try {
-              const roles = [].map.call(document.querySelectorAll('input[name=role]:checked'), function (el) { return el.value; });
+              const name = document.getElementById("f_name").value.trim();
+              const role = document.getElementById("f_role").value;
+              const accountStatus = document.getElementById("f_status").value;
+              const roles = role ? [role] : [];
+              if (!name) throw new Error("请填写姓名");
               if (isNew) {
+                const username = document.getElementById("f_user").value.trim();
+                const password = document.getElementById("f_pass").value;
+                if (!username || !password) throw new Error("请填写账号和密码");
                 await api("/api/admin/users", { method: "POST", body: JSON.stringify({
-                  username: document.getElementById("f_user").value.trim(),
-                  display_name: document.getElementById("f_name").value.trim(),
-                  password: document.getElementById("f_pass").value,
-                  roles: roles
+                  username: username,
+                  display_name: name,
+                  password: password,
+                  roles: roles,
+                  account_status: accountStatus
                 })});
               } else {
-                const payload = { roles: roles, is_active: document.getElementById("f_active").checked };
+                const payload = {
+                  display_name: name,
+                  roles: roles,
+                  account_status: accountStatus
+                };
                 const pw = document.getElementById("f_pass").value;
                 if (pw) payload.password = pw;
                 await api("/api/admin/users/" + u.id, { method: "PUT", body: JSON.stringify(payload) });
@@ -97,6 +184,7 @@
         }
       });
     }
+
     document.getElementById("btnNew").onclick = function () { editUser(null); };
     (async function () {
       if (!LegalMindAuth.requireLogin()) return;

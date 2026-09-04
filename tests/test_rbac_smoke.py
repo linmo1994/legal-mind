@@ -34,24 +34,32 @@ class TestRbacSmoke(unittest.TestCase):
             },
         )
         self.assertEqual(st, 201)
-        st, lead = self.api.create_user(
-            self.dh,
+        ids = []
+        for name in ("partner1", "lead1", "asst1"):
+            st, u = self.api.create_user(
+                self.dh,
+                {
+                    "username": name,
+                    "password": "pass12345",
+                    "roles": [],
+                    "must_change_password": False,
+                },
+            )
+            self.assertEqual(st, 201)
+            ids.append(u["user"]["id"])
+        oh = "Bearer " + self.api.login({"username": "officer1", "password": "pass12345"})[1]["token"]
+        st, case_body = self.api.create_case(
+            oh,
             {
-                "username": "lead1",
-                "password": "pass12345",
-                "roles": [],
-                "must_change_password": False,
+                "case_type": "civil",
+                "title": "冒烟案",
+                "partner_user_id": ids[0],
+                "lead_lawyer_user_id": ids[1],
+                "assistant_user_id": ids[2],
             },
         )
         self.assertEqual(st, 201)
-        oh = "Bearer " + self.api.login({"username": "officer1", "password": "pass12345"})[1]["token"]
-        st, case_body = self.api.create_case(oh, {"case_no": "SMOKE-1", "title": "冒烟案"})
-        self.assertEqual(st, 201)
         case_id = case_body["case"]["id"]
-        st, _ = self.api.add_member(
-            oh, case_id, {"user_id": lead["user"]["id"], "role_code": "lead_lawyer"}
-        )
-        self.assertEqual(st, 201)
         lh = "Bearer " + self.api.login({"username": "lead1", "password": "pass12345"})[1]["token"]
         st, ok = self.api.check_orchestrate_access(
             lh, {"case_id": case_id, "user_text": "请帮我断案"}

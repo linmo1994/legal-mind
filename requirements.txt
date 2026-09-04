@@ -1,7 +1,8 @@
 # MCP服务端依赖
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
-torch>=2.0.0
+python-docx>=0.8.11
+langgraph>=0.2.0
 
 
 

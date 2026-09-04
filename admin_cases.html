@@ -7,11 +7,64 @@
   <link rel="stylesheet" href="admin.css">
   <style>
     .admin-table th, .admin-table td { border:1px solid #e5e7eb; padding:8px; text-align:left; font-size:13px; }
-    .case-panel { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
-    .panel { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; }
-    @media (max-width:800px){ .case-panel { grid-template-columns:1fr; } }
+    .admin-table th { background:#f8fafc; }
     .form-grid label { display:block; margin:8px 0 4px; font-size:13px; }
     .form-grid input, .form-grid select { width:100%; padding:8px; box-sizing:border-box; }
+    .status-pill {
+      display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px;
+      background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe;
+    }
+    .row-actions button { margin-right: 4px; }
+    .detail-block { margin: 0 0 14px; }
+    .detail-block h4 { margin: 0 0 6px; font-size: 14px; color: #1a4a6e; }
+    .client-pick-wrap { position: relative; }
+    .client-ms {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      min-height: 38px; padding: 6px 32px 6px 8px; box-sizing: border-box;
+      border: 1px solid #d1d5db; border-radius: 8px; background: #fff;
+      cursor: pointer; position: relative;
+    }
+    .client-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+    .client-ms:focus-within, .client-ms.is-open {
+      border-color: #1a4a6e; box-shadow: 0 0 0 2px rgba(26, 74, 110, 0.12);
+    }
+    .client-ms-placeholder { color: #9ca3af; font-size: 13px; }
+    .client-chip {
+      display: inline-flex; align-items: center; gap: 4px;
+      max-width: 100%; padding: 3px 8px; border-radius: 6px; font-size: 12px;
+      background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
+    }
+    .client-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .client-chip button {
+      border: 0; background: transparent; color: #4338ca; cursor: pointer;
+      font-size: 14px; line-height: 1; padding: 0; flex-shrink: 0;
+    }
+    .client-ms-caret {
+      position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+      color: #6b7280; font-size: 11px; pointer-events: none;
+    }
+    .client-ms-menu {
+      display: none; position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+      z-index: 30; max-height: 220px; overflow: auto;
+      border: 1px solid #d1d5db; border-radius: 8px; background: #fff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+    }
+    .client-pick-wrap.is-open .client-ms-menu { display: block; }
+    .client-ms-option {
+      display: block; width: 100%; text-align: left; border: 0; background: #fff;
+      padding: 9px 12px; font-size: 13px; cursor: pointer; color: #111827;
+    }
+    .client-ms-option:hover, .client-ms-option:focus { background: #f1f5f9; outline: none; }
+    .client-ms-empty { padding: 10px 12px; font-size: 13px; color: #6b7280; }
+    .file-list { margin: 4px 0 10px; padding-left: 18px; font-size: 13px; }
+    .file-list li { margin: 2px 0; }
+    .file-preview {
+      margin: 6px 0 0; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px;
+      background: #f8fafc; font-size: 12px; color: #374151;
+    }
+    .file-preview ul { margin: 4px 0 0; padding-left: 18px; }
+    .file-preview li { margin: 2px 0; word-break: break-all; }
+    .existing-files { margin: 0 0 8px; }
   </style>
 </head>
 <body class="admin-body" data-admin-page="cases">
@@ -19,38 +72,31 @@
     <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
     <div id="adminSubnav"></div>
     <h1>案件管理</h1>
-    <p class="muted">行政主管 / 主任可创建案件并分案（指定合伙人、主办律师或助理）。</p>
+    <p class="muted">新建 / 编辑 / 详情使用浮层。创建时须分案并可选关联多个委托客户。</p>
     <p id="status" class="muted"></p>
-    <div class="case-panel">
-      <div class="panel">
-        <h3>案件列表</h3>
-        <button type="button" class="btn-primary" id="btnNew">新建案件</button>
-        <table class="admin-table" style="width:100%;margin-top:10px;border-collapse:collapse;">
-          <thead><tr><th>案号</th><th>标题</th><th>状态</th></tr></thead>
-          <tbody id="caseTb"></tbody>
-        </table>
-      </div>
-      <div class="panel">
-        <h3>分案成员 <span id="caseTitle" class="muted"></span></h3>
-        <div id="memberBox" class="muted">请选择左侧案件</div>
-        <div id="assignForm" class="form-grid" hidden>
-          <label>用户</label><select id="m_user"></select>
-          <label>案级角色</label>
-          <select id="m_role">
-            <option value="partner">合伙人</option>
-            <option value="lead_lawyer">主办律师</option>
-            <option value="assistant">助理</option>
-          </select>
-          <button type="button" class="btn-primary" id="btnAssign" style="margin-top:10px;">加入案件</button>
-        </div>
-      </div>
-    </div>
+    <button type="button" class="btn-primary" id="btnNew">新建案件</button>
+    <table class="admin-table" style="width:100%;margin-top:12px;border-collapse:collapse;background:#fff;">
+      <thead><tr><th>案号</th><th>类型</th><th>案件名称</th><th>状态</th><th></th></tr></thead>
+      <tbody id="caseTb"></tbody>
+    </table>
   </div>
   <script src="auth.js"></script>
   <script src="admin_nav.js"></script>
   <script src="admin_ui.js"></script>
   <script>
-    let base = "", selectedId = null, users = [];
+    let base = "", users = [], clients = [], caseStatuses = [
+      { code: "init", label: "初始化" },
+      { code: "assigned", label: "已分案" },
+      { code: "analyzing", label: "分析案情中" },
+      { code: "handling", label: "办理案件中" },
+      { code: "closed", label: "已结案" }
+    ], caseTypes = [
+      { code: "civil", label: "民事", abbr: "民" },
+      { code: "criminal", label: "刑事", abbr: "刑" },
+      { code: "administrative", label: "行政", abbr: "行" },
+      { code: "enforcement", label: "执行", abbr: "执" }
+    ];
+
     async function api(path, opts) {
       const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
       const data = await resp.json().catch(function(){return {};});
@@ -58,92 +104,574 @@
       if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
       return data;
     }
+    async function uploadFile(file, description) {
+      const fd = new FormData();
+      fd.append("file", file);
+      if (description) fd.append("description", description);
+      const headers = {};
+      const token = LegalMindAuth.getToken();
+      if (token) headers.Authorization = "Bearer " + token;
+      const resp = await fetch(base + "/api/files/upload", { method: "POST", headers: headers, body: fd });
+      const data = await resp.json().catch(function(){return {};});
+      if (!resp.ok) throw new Error(data.error || ("上传失败 " + resp.status));
+      return data.file_id;
+    }
+    async function uploadInputFiles(inputId, description) {
+      const input = document.getElementById(inputId);
+      const files = input && input.files ? Array.prototype.slice.call(input.files) : [];
+      const ids = [];
+      for (let i = 0; i < files.length; i++) ids.push(await uploadFile(files[i], description));
+      return ids;
+    }
+    function clampFileInput(input, maxCount) {
+      if (!input || !input.files || input.files.length <= maxCount) return true;
+      const dt = new DataTransfer();
+      for (let i = 0; i < maxCount; i++) dt.items.add(input.files[i]);
+      input.files = dt.files;
+      return false;
+    }
+    function validateUploadCounts(existingContract, existingEvidence) {
+      const contractInput = document.getElementById("c_contract");
+      const evidenceInput = document.getElementById("c_evidence");
+      const contractFiles = contractInput && !contractInput.disabled && contractInput.files
+        ? contractInput.files.length : 0;
+      const evidenceFiles = evidenceInput && !evidenceInput.disabled && evidenceInput.files
+        ? evidenceInput.files.length : 0;
+      if (existingContract + contractFiles > 1) {
+        return "委托合同最多上传 1 份文件";
+      }
+      if (existingEvidence + evidenceFiles > 10) {
+        return "证据材料最多上传 10 份文件（含已有材料）";
+      }
+      return "";
+    }
+    function statusLabel(code) {
+      const hit = caseStatuses.find(function (s) { return s.code === code; });
+      return (hit && hit.label) || code || "—";
+    }
+    function typeLabel(code) {
+      const hit = caseTypes.find(function (t) { return t.code === code; });
+      return (hit && hit.label) || code || "—";
+    }
+    function assignableUsers() {
+      return (users || []).filter(function (u) {
+        const roles = u.roles || [];
+        return roles.indexOf("director") < 0 && roles.indexOf("admin_officer") < 0 && u.is_active !== false;
+      });
+    }
+    function userOptionsHtml(selectedId) {
+      const list = assignableUsers();
+      if (!list.length) return '<option value="">无可分案用户（请先创建律师账号）</option>';
+      return '<option value="">请选择</option>' + list.map(function (u) {
+        const sel = selectedId && String(selectedId) === String(u.id) ? " selected" : "";
+        return '<option value="' + u.id + '"' + sel + ">" + AdminUI.esc(u.display_name || u.username) + "</option>";
+      }).join("");
+    }
+    function typeOptionsHtml(selected) {
+      return caseTypes.map(function (t) {
+        return '<option value="' + t.code + '"' + (selected === t.code ? " selected" : "") + ">" +
+          AdminUI.esc(t.label) + "</option>";
+      }).join("");
+    }
+    function statusOptionsHtml(selected) {
+      return caseStatuses.map(function (s) {
+        return '<option value="' + s.code + '"' + (selected === s.code ? " selected" : "") + ">" +
+          AdminUI.esc(s.label) + "</option>";
+      }).join("");
+    }
+    function clientOptionLabel(c) {
+      const ctype = c.client_type_label || (c.client_type === "enterprise" ? "企业" : "个人");
+      return (c.name || "") + " · " + ctype + " · " + (c.id_number || "");
+    }
+    function buildCaseTitle(caseType, clientIds) {
+      const typeText = typeLabel(caseType) || "案件";
+      const names = (clientIds || []).map(function (id) {
+        const hit = clients.find(function (c) { return String(c.id) === String(id); });
+        return hit ? hit.name : "";
+      }).filter(Boolean);
+      if (names.length) return typeText + " · " + names.join("、");
+      return typeText + "案件";
+    }
+    function clientPickerHtml(selectedIds) {
+      if (!clients.length) {
+        return '<p class="field-hint" style="margin:0;">暂无客户，请先在「客户」菜单建档</p>' +
+          '<input type="hidden" id="c_client_ids" value="">';
+      }
+      return '<div class="client-pick-wrap" id="c_client_pick">' +
+        '<div class="client-ms" id="c_client_ms" tabindex="0" role="combobox" aria-expanded="false" aria-haspopup="listbox">' +
+          '<div class="client-chips" id="c_client_chips"></div>' +
+          '<span class="client-ms-caret">▼</span>' +
+        "</div>" +
+        '<div class="client-ms-menu" id="c_client_menu" role="listbox"></div>' +
+        '<input type="hidden" id="c_client_ids" value="' + AdminUI.esc((selectedIds || []).join(",")) + '">' +
+        '<p class="field-hint" style="margin:6px 0 0;">点击展开选择，已选项显示在框内，点 × 可移除</p>' +
+        "</div>";
+    }
+    function getSelectedClientIds() {
+      const raw = (document.getElementById("c_client_ids") || {}).value || "";
+      return raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean).map(function (s) {
+        return parseInt(s, 10);
+      }).filter(function (n) { return !isNaN(n); });
+    }
+    function setSelectedClientIds(ids) {
+      const unique = [];
+      const seen = {};
+      (ids || []).forEach(function (id) {
+        const key = String(id);
+        if (!seen[key]) { seen[key] = true; unique.push(parseInt(id, 10)); }
+      });
+      const hidden = document.getElementById("c_client_ids");
+      if (hidden) hidden.value = unique.join(",");
+      renderClientChips(unique);
+      renderClientMenu(unique);
+    }
+    function renderClientChips(ids) {
+      const box = document.getElementById("c_client_chips");
+      if (!box) return;
+      if (!ids.length) {
+        box.innerHTML = '<span class="client-ms-placeholder">请选择委托客户…</span>';
+        return;
+      }
+      box.innerHTML = ids.map(function (id) {
+        const hit = clients.find(function (c) { return String(c.id) === String(id); });
+        const label = hit ? hit.name : ("#" + id);
+        return '<span class="client-chip" data-id="' + id + '"><span title="' + AdminUI.esc(label) + '">' +
+          AdminUI.esc(label) + '</span><button type="button" aria-label="移除" data-remove="' + id + '">×</button></span>';
+      }).join("");
+      box.querySelectorAll("[data-remove]").forEach(function (btn) {
+        btn.onclick = function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          const removeId = btn.getAttribute("data-remove");
+          setSelectedClientIds(getSelectedClientIds().filter(function (id) {
+            return String(id) !== String(removeId);
+          }));
+        };
+      });
+    }
+    function renderClientMenu(selectedIds) {
+      const menu = document.getElementById("c_client_menu");
+      if (!menu) return;
+      const picked = {};
+      (selectedIds || []).forEach(function (id) { picked[String(id)] = true; });
+      const available = clients.filter(function (c) { return !picked[String(c.id)]; });
+      if (!available.length) {
+        menu.innerHTML = '<div class="client-ms-empty">已全部选中，或无可选客户</div>';
+        return;
+      }
+      menu.innerHTML = available.map(function (c) {
+        return '<button type="button" class="client-ms-option" role="option" data-add="' + c.id + '">' +
+          AdminUI.esc(clientOptionLabel(c)) + "</button>";
+      }).join("");
+      menu.querySelectorAll("[data-add]").forEach(function (btn) {
+        btn.onclick = function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          const id = parseInt(btn.getAttribute("data-add"), 10);
+          const next = getSelectedClientIds();
+          if (next.indexOf(id) < 0) next.push(id);
+          setSelectedClientIds(next);
+        };
+      });
+    }
+    function setClientMenuOpen(open) {
+      const wrap = document.getElementById("c_client_pick");
+      const ms = document.getElementById("c_client_ms");
+      if (!wrap || !ms) return;
+      wrap.classList.toggle("is-open", !!open);
+      ms.classList.toggle("is-open", !!open);
+      ms.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    function bindClientPicker(initialIds) {
+      setSelectedClientIds(initialIds || []);
+      const wrap = document.getElementById("c_client_pick");
+      const ms = document.getElementById("c_client_ms");
+      if (!wrap || !ms) return;
+      ms.onclick = function (e) {
+        if (e.target && e.target.closest && e.target.closest("[data-remove]")) return;
+        setClientMenuOpen(!wrap.classList.contains("is-open"));
+      };
+      ms.onkeydown = function (e) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setClientMenuOpen(!wrap.classList.contains("is-open"));
+        } else if (e.key === "Escape") {
+          setClientMenuOpen(false);
+        }
+      };
+      if (!bindClientPicker._docBound) {
+        document.addEventListener("click", function (e) {
+          const pick = document.getElementById("c_client_pick");
+          if (!pick) return;
+          if (!pick.contains(e.target)) setClientMenuOpen(false);
+        });
+        bindClientPicker._docBound = true;
+      }
+    }
+    function memberIdByRole(members, role) {
+      const hit = (members || []).find(function (m) { return m.role_code === role; });
+      return hit ? hit.user_id : "";
+    }
+    function fileListHtml(ids, label) {
+      if (!ids || !ids.length) {
+        return "<div class='existing-files'><p class='muted' style='margin:4px 0;'>" + label + "：暂无</p></div>";
+      }
+      return "<div class='existing-files'><p style='margin:4px 0 2px;font-size:13px;'><strong>" + label +
+        "</strong>（共 " + ids.length + " 份）</p><ol class='file-list'>" +
+        ids.map(function (id) {
+          return "<li><a href='" + base + "/api/files/" + encodeURIComponent(id) + "/download' target='_blank' rel='noopener' data-fid='" +
+            AdminUI.esc(id) + "'>加载文件名…</a></li>";
+        }).join("") + "</ol></div>";
+    }
+    function existingFilesFormHtml(contractIds, evidenceIds) {
+      const parts = [];
+      if (contractIds && contractIds.length) parts.push(fileListHtml(contractIds, "已有委托合同"));
+      if (evidenceIds && evidenceIds.length) parts.push(fileListHtml(evidenceIds, "已有证据材料"));
+      if (!parts.length) return "";
+      return '<div id="c_existing_files">' + parts.join("") + "</div>";
+    }
+    function selectedFilesPreviewHtml(files) {
+      if (!files || !files.length) return "";
+      return "<div class='file-preview'><strong>本次已选 " + files.length + " 个文件</strong><ul>" +
+        Array.prototype.map.call(files, function (f, i) {
+          return "<li>" + (i + 1) + ". " + AdminUI.esc(f.name || ("文件" + (i + 1))) + "</li>";
+        }).join("") + "</ul></div>";
+    }
+    function renderSelectedPreview(inputId, previewId) {
+      const input = document.getElementById(inputId);
+      const box = document.getElementById(previewId);
+      if (!box) return;
+      if (!input || !input.files || !input.files.length) {
+        box.innerHTML = "";
+        return;
+      }
+      box.innerHTML = selectedFilesPreviewHtml(input.files);
+    }
+    async function resolveFileNames(root) {
+      if (!root) return;
+      const links = root.querySelectorAll("a[data-fid]");
+      for (let i = 0; i < links.length; i++) {
+        const id = links[i].getAttribute("data-fid");
+        try {
+          const info = await api("/api/files/" + encodeURIComponent(id));
+          const name = info.original_name || id;
+          links[i].textContent = name;
+          links[i].title = name;
+        } catch (e) {
+          links[i].textContent = "（无法读取文件名，仍可下载）";
+        }
+      }
+    }
+    async function refreshCaseNoPreview() {
+      const type = document.getElementById("c_type").value;
+      const preview = document.getElementById("c_no");
+      const hint = document.getElementById("c_no_hint");
+      if (!type) {
+        preview.value = "";
+        hint.textContent = "选择案件类型后自动生成案号";
+        return;
+      }
+      try {
+        const data = await api("/api/admin/cases/next-no?case_type=" + encodeURIComponent(type));
+        preview.value = data.case_no || "";
+        hint.textContent = "保存时以服务端生成的案号为准";
+      } catch (e) {
+        preview.value = "";
+        hint.textContent = e.message || "预览案号失败";
+      }
+    }
+
     async function loadCases() {
       const data = await api("/api/admin/cases");
+      if (data.case_statuses && data.case_statuses.length) caseStatuses = data.case_statuses;
+      if (data.case_types && data.case_types.length) caseTypes = data.case_types;
       const tb = document.getElementById("caseTb");
       tb.innerHTML = "";
       (data.cases || []).forEach(function (c) {
         const tr = document.createElement("tr");
-        tr.style.cursor = "pointer";
-        tr.innerHTML = "<td>" + AdminUI.esc(c.case_no) + "</td><td>" + AdminUI.esc(c.title) + "</td><td>" + AdminUI.esc(c.status) + "</td>";
-        tr.onclick = function () { selectCase(c); };
+        const label = c.status_label || statusLabel(c.status);
+        const typeText = c.case_type_label || typeLabel(c.case_type);
+        tr.innerHTML = "<td>" + AdminUI.esc(c.case_no) + "</td><td>" + AdminUI.esc(typeText) +
+          "</td><td>" + AdminUI.esc(c.title) +
+          "</td><td><span class='status-pill'>" + AdminUI.esc(label) + "</span></td>" +
+          "<td class='row-actions'></td>";
+        const actions = tr.querySelector(".row-actions");
+        function addBtn(text, fn) {
+          const b = document.createElement("button");
+          b.type = "button"; b.className = "btn-ghost"; b.textContent = text;
+          b.onclick = function (e) { e.stopPropagation(); fn(); };
+          actions.appendChild(b);
+        }
+        addBtn("详情", function () { viewCase(c.id); });
+        addBtn("编辑", function () { editCase(c.id); });
+        addBtn("删除", function () { deleteCase(c); });
         tb.appendChild(tr);
       });
     }
-    async function selectCase(c) {
-      selectedId = c.id;
-      document.getElementById("caseTitle").textContent = " · " + c.case_no;
-      document.getElementById("assignForm").hidden = false;
-      const detail = await api("/api/admin/cases/" + c.id);
-      const box = document.getElementById("memberBox");
+
+    async function viewCase(caseId) {
+      const detail = await api("/api/admin/cases/" + caseId);
+      const c = detail.case;
       const members = detail.members || [];
-      if (!members.length) box.innerHTML = "<p class='muted'>暂无成员</p>";
-      else {
-        box.innerHTML = "<ul>" + members.map(function (m) {
-          return "<li>" + AdminUI.esc(m.display_name || m.username) + " · " + AdminUI.esc(m.role_name) +
-            ' <button type="button" data-uid="' + m.user_id + '">移除</button></li>';
-        }).join("") + "</ul>";
-        box.querySelectorAll("button").forEach(function (btn) {
-          btn.onclick = async function () {
-            try {
-              await api("/api/admin/cases/" + selectedId + "/members/" + btn.getAttribute("data-uid"), { method: "DELETE" });
-              selectCase(c);
-              AdminUI.toast("已移除", true);
-            } catch (e) { AdminUI.toast(e.message, false); }
-          };
-        });
-      }
-    }
-    document.getElementById("btnNew").onclick = function () {
+      const caseClients = detail.clients || [];
+      const body =
+        '<div class="detail-block"><h4>基本信息</h4>' +
+        "<p>案号：" + AdminUI.esc(c.case_no) + "</p>" +
+        "<p>类型：" + AdminUI.esc(c.case_type_label || typeLabel(c.case_type)) + "</p>" +
+        "<p>案件名称：" + AdminUI.esc(c.title) + "</p>" +
+        "<p>状态：" + AdminUI.esc(c.status_label || statusLabel(c.status)) + "</p></div>" +
+        '<div class="detail-block"><h4>委托客户</h4>' +
+        (caseClients.length
+          ? "<ul>" + caseClients.map(function (cl) {
+              return "<li>" + AdminUI.esc(cl.name) + "（" + AdminUI.esc(cl.client_type_label || cl.client_type) +
+                "）· " + AdminUI.esc(cl.id_number) + "</li>";
+            }).join("") + "</ul>"
+          : "<p class='muted'>未关联客户</p>") +
+        "</div>" +
+        '<div class="detail-block"><h4>分案成员</h4>' +
+        (members.length
+          ? "<ul>" + members.map(function (m) {
+              return "<li>" + AdminUI.esc(m.display_name || m.username) + " · " + AdminUI.esc(m.role_name) + "</li>";
+            }).join("") + "</ul>"
+          : "<p class='muted'>暂无成员</p>") +
+        "</div>" +
+        '<div class="detail-block" id="detailFiles"><h4>案件材料</h4>' +
+        fileListHtml(c.contract_file_ids, "委托合同") +
+        fileListHtml(c.evidence_file_ids, "证据材料") +
+        "</div>";
       AdminUI.openDrawer({
-        title: "新建案件",
-        body: '<div class="form-grid"><label>案号</label><input id="c_no"><label>标题</label><input id="c_title"></div>',
-        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button><button type="button" class="btn-primary" id="c_save">创建</button>',
+        title: "案件详情",
+        body: body,
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">关闭</button>' +
+          '<button type="button" class="btn-primary" id="d_edit">编辑</button>',
         onReady: function () {
-          document.getElementById("c_save").onclick = async function () {
-            try {
-              await api("/api/admin/cases", { method: "POST", body: JSON.stringify({
-                case_no: document.getElementById("c_no").value.trim(),
-                title: document.getElementById("c_title").value.trim()
-              })});
-              AdminUI.closeDrawer();
-              AdminUI.toast("已创建", true);
-              loadCases();
-            } catch (e) { AdminUI.toast(e.message, false); }
+          resolveFileNames(document.getElementById("detailFiles"));
+          document.getElementById("d_edit").onclick = function () {
+            AdminUI.closeDrawer();
+            editCase(caseId);
           };
         }
       });
-    };
-    document.getElementById("btnAssign").onclick = async function () {
-      if (!selectedId) return;
+    }
+
+    function openCaseForm(mode, detail) {
+      const isNew = mode === "new";
+      const c = (detail && detail.case) || {};
+      const members = (detail && detail.members) || [];
+      const caseClients = (detail && detail.clients) || [];
+      const selectedClientIds = caseClients.map(function (x) { return x.id; });
+      const existingContractCount = (c.contract_file_ids || []).length;
+      const existingEvidenceCount = (c.evidence_file_ids || []).length;
+      const contractSlots = Math.max(0, 1 - existingContractCount);
+      const evidenceSlots = Math.max(0, 10 - existingEvidenceCount);
+      const contractLabel = isNew
+        ? "委托合同（可选，最多 1 份）"
+        : (contractSlots ? "委托合同（还可上传）" : "委托合同");
+      const evidenceLabel = isNew
+        ? "证据材料（可选，最多 10 份）"
+        : (evidenceSlots ? "证据材料（还可上传，剩余 " + evidenceSlots + " 份）" : "证据材料");
+      const existingFilesBlock = isNew
+        ? ""
+        : existingFilesFormHtml(c.contract_file_ids || [], c.evidence_file_ids || []);
+      AdminUI.openDrawer({
+        title: isNew ? "新建案件" : "编辑案件",
+        body:
+          '<div class="form-grid">' +
+          '<p class="form-legend">标有 * 的为必填项。案件名称由类型与客户自动生成。</p>' +
+          "<label class=\"req\">案件类型</label><select id=\"c_type\"" + (isNew ? "" : " disabled") + ">" +
+            typeOptionsHtml(c.case_type || "civil") + "</select>" +
+          '<p class="field-error" id="c_type_err" hidden></p>' +
+          "<label>案号</label><input id=\"c_no\" readonly value=\"" + AdminUI.esc(c.case_no || "") + "\">" +
+          (isNew
+            ? "<p class=\"field-hint\" id=\"c_no_hint\">选择类型后自动生成</p>"
+            : "<p class=\"field-hint\">案号创建后不可修改</p>") +
+          (isNew ? "" : ("<label class=\"req\">状态</label><select id=\"c_status\">" + statusOptionsHtml(c.status || "assigned") + "</select>")) +
+          "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:14px 0;\">" +
+          "<label>委托客户</label>" + clientPickerHtml(selectedClientIds) +
+          "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:14px 0;\">" +
+          existingFilesBlock +
+          (contractSlots
+            ? "<label>" + contractLabel + "</label>" +
+              "<input id=\"c_contract\" type=\"file\" accept=\".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip\">" +
+              "<div id=\"c_contract_preview\"></div>"
+            : "<input id=\"c_contract\" type=\"file\" disabled hidden>") +
+          (evidenceSlots
+            ? "<label>" + evidenceLabel + "</label>" +
+              "<input id=\"c_evidence\" type=\"file\" multiple accept=\".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt\">" +
+              "<div id=\"c_evidence_preview\"></div>"
+            : "<input id=\"c_evidence\" type=\"file\" multiple disabled hidden>") +
+          "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:14px 0;\">" +
+          "<p class=\"form-legend\">合伙人、主办律师必填且须为不同用户；助理可选</p>" +
+          "<label class=\"req\">合伙人</label><select id=\"c_partner\">" + userOptionsHtml(memberIdByRole(members, "partner")) + "</select>" +
+          '<p class="field-error" id="c_partner_err" hidden></p>' +
+          "<label class=\"req\">主办律师</label><select id=\"c_lead\">" + userOptionsHtml(memberIdByRole(members, "lead_lawyer")) + "</select>" +
+          '<p class="field-error" id="c_lead_err" hidden></p>' +
+          "<label>助理（可选）</label><select id=\"c_assistant\">" + userOptionsHtml(memberIdByRole(members, "assistant")) + "</select>" +
+          '<p class="field-error" id="c_assistant_err" hidden></p>' +
+          "</div>",
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
+          '<button type="button" class="btn-primary" id="c_save">' + (isNew ? "创建并分案" : "保存") + "</button>",
+        onReady: function () {
+          bindClientPicker(selectedClientIds);
+          if (document.getElementById("c_existing_files")) {
+            resolveFileNames(document.getElementById("c_existing_files"));
+          }
+          const contractInput = document.getElementById("c_contract");
+          if (contractInput && !contractInput.disabled) {
+            contractInput.onchange = function () {
+              renderSelectedPreview("c_contract", "c_contract_preview");
+            };
+          }
+          const evidenceInput = document.getElementById("c_evidence");
+          if (evidenceInput && !evidenceInput.disabled) {
+            evidenceInput.onchange = function () {
+              if (!clampFileInput(evidenceInput, evidenceSlots)) {
+                AdminUI.toast("证据材料最多再选 " + evidenceSlots + " 份，已自动截取", false);
+              }
+              renderSelectedPreview("c_evidence", "c_evidence_preview");
+            };
+          }
+          function setErr(id, errId, msg) {
+            const el = document.getElementById(id);
+            const err = document.getElementById(errId);
+            if (!el || !err) return;
+            if (msg) { el.classList.add("is-invalid"); err.hidden = false; err.textContent = msg; }
+            else { el.classList.remove("is-invalid"); err.hidden = true; err.textContent = ""; }
+          }
+          function validateCaseForm() {
+            let ok = true;
+            const caseType = document.getElementById("c_type").value;
+            const partner = document.getElementById("c_partner").value;
+            const lead = document.getElementById("c_lead").value;
+            const assistant = document.getElementById("c_assistant").value;
+            if (!caseType) { setErr("c_type", "c_type_err", "请选择案件类型"); ok = false; }
+            else setErr("c_type", "c_type_err", "");
+            if (!partner) { setErr("c_partner", "c_partner_err", "请选择合伙人"); ok = false; }
+            else setErr("c_partner", "c_partner_err", "");
+            if (!lead) { setErr("c_lead", "c_lead_err", "请选择主办律师"); ok = false; }
+            else setErr("c_lead", "c_lead_err", "");
+            setErr("c_assistant", "c_assistant_err", "");
+            if (partner && lead && partner === lead) {
+              setErr("c_lead", "c_lead_err", "合伙人与主办律师必须是不同用户");
+              ok = false;
+            }
+            if (assistant && ((partner && assistant === partner) || (lead && assistant === lead))) {
+              setErr("c_assistant", "c_assistant_err", "助理不能与合伙人或主办律师为同一人");
+              ok = false;
+            }
+            return ok ? { caseType: caseType, partner: partner, lead: lead, assistant: assistant } : null;
+          }
+          if (isNew) {
+            document.getElementById("c_type").onchange = refreshCaseNoPreview;
+            refreshCaseNoPreview();
+          }
+          document.getElementById("c_save").onclick = async function () {
+            const btn = document.getElementById("c_save");
+            try {
+              const form = validateCaseForm();
+              if (!form) {
+                AdminUI.toast("请按提示完善必填项", false);
+                return;
+              }
+              const uploadErr = validateUploadCounts(existingContractCount, existingEvidenceCount);
+              if (uploadErr) {
+                AdminUI.toast(uploadErr, false);
+                return;
+              }
+              const clientIds = getSelectedClientIds();
+              const title = buildCaseTitle(form.caseType, clientIds);
+              btn.disabled = true;
+              btn.textContent = "上传材料中…";
+              const contractIds = await uploadInputFiles("c_contract", "委托合同");
+              const evidenceIds = await uploadInputFiles("c_evidence", "证据材料");
+              btn.textContent = isNew ? "创建中…" : "保存中…";
+              if (isNew) {
+                const payload = {
+                  case_type: form.caseType,
+                  title: title,
+                  partner_user_id: parseInt(form.partner, 10),
+                  lead_lawyer_user_id: parseInt(form.lead, 10),
+                  client_ids: clientIds,
+                  contract_file_ids: contractIds,
+                  evidence_file_ids: evidenceIds
+                };
+                if (form.assistant) payload.assistant_user_id = parseInt(form.assistant, 10);
+                await api("/api/admin/cases", {
+                  method: "POST",
+                  body: JSON.stringify(payload)
+                });
+              } else {
+                await api("/api/admin/cases/" + c.id, {
+                  method: "PUT",
+                  body: JSON.stringify({
+                    title: title,
+                    status: document.getElementById("c_status").value,
+                    client_ids: clientIds,
+                    append_contract_file_ids: contractIds,
+                    append_evidence_file_ids: evidenceIds
+                  })
+                });
+                const rolePairs = [
+                  ["partner", form.partner],
+                  ["lead_lawyer", form.lead]
+                ];
+                if (form.assistant) rolePairs.push(["assistant", form.assistant]);
+                for (let i = 0; i < rolePairs.length; i++) {
+                  await api("/api/admin/cases/" + c.id + "/members", {
+                    method: "POST",
+                    body: JSON.stringify({
+                      user_id: parseInt(rolePairs[i][1], 10),
+                      role_code: rolePairs[i][0]
+                    })
+                  });
+                }
+              }
+              AdminUI.closeDrawer();
+              AdminUI.toast(isNew ? "案件已创建" : "案件已保存", true);
+              await loadCases();
+            } catch (e) {
+              AdminUI.toast(e.message, false);
+              btn.disabled = false;
+              btn.textContent = isNew ? "创建并分案" : "保存";
+            }
+          };
+        }
+      });
+    }
+
+    async function editCase(caseId) {
+      const detail = await api("/api/admin/cases/" + caseId);
+      openCaseForm("edit", detail);
+    }
+
+    async function deleteCase(c) {
+      const ok = await AdminUI.confirmAction({
+        title: "删除案件",
+        message: "确认删除案件「" + (c.case_no || "") + " " + (c.title || "") + "」？此操作不可恢复。",
+        okText: "删除",
+        danger: true
+      });
+      if (!ok) return;
       try {
-        await api("/api/admin/cases/" + selectedId + "/members", {
-          method: "POST",
-          body: JSON.stringify({
-            user_id: parseInt(document.getElementById("m_user").value, 10),
-            role_code: document.getElementById("m_role").value
-          })
-        });
-        AdminUI.toast("已分案", true);
-        const cases = await api("/api/admin/cases");
-        const c = (cases.cases || []).find(function (x) { return x.id === selectedId; });
-        if (c) selectCase(c);
+        await api("/api/admin/cases/" + c.id, { method: "DELETE" });
+        AdminUI.toast("已删除", true);
+        loadCases();
       } catch (e) { AdminUI.toast(e.message, false); }
-    };
+    }
+
+    document.getElementById("btnNew").onclick = function () { openCaseForm("new", null); };
+
     (async function () {
       if (!LegalMindAuth.requireLogin()) return;
       base = await LegalMindAuth.mcpBase();
       try {
-        await loadCases();
-        const udata = await api("/api/admin/users");
+        const [udata, cdata] = await Promise.all([
+          api("/api/admin/users"),
+          api("/api/admin/clients")
+        ]);
         users = udata.users || [];
-        const sel = document.getElementById("m_user");
-        sel.innerHTML = users.filter(function (u) {
-          const roles = u.roles || [];
-          return roles.indexOf("director") < 0 && roles.indexOf("admin_officer") < 0;
-        }).map(function (u) {
-          return '<option value="' + u.id + '">' + AdminUI.esc(u.display_name || u.username) + "</option>";
-        }).join("") || '<option value="">无可分案用户（请先在用户管理中创建律师账号）</option>';
+        clients = cdata.clients || [];
+        await loadCases();
       } catch (e) {
         document.getElementById("status").textContent = e.message;
         document.getElementById("status").className = "status-err";

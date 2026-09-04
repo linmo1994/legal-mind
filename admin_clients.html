@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>客户管理 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; font-size: 14px; }
+    .admin-table th { background: #f8fafc; }
+    .form-grid label { display: block; margin: 10px 0 4px; font-size: 13px; }
+    .form-grid input, .form-grid select { width: 100%; padding: 8px; box-sizing: border-box; }
+    .row-actions button { margin-right: 4px; }
+    .detail-block p { margin: 6px 0; font-size: 14px; }
+  </style>
+</head>
+<body class="admin-body" data-admin-page="clients">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>客户管理</h1>
+    <p class="muted">委托客户档案。新建 / 编辑 / 详情使用浮层。与「权限管理 · 用户」不同。</p>
+    <p id="status" class="muted"></p>
+    <button type="button" class="btn-primary" id="btnNew">新建客户</button>
+    <table class="admin-table" id="tbl" style="width:100%;margin-top:12px;border-collapse:collapse;background:#fff;">
+      <thead><tr><th>类型</th><th>名称</th><th>识别号</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    let base = "";
+    let clientTypes = [
+      { code: "person", label: "个人" },
+      { code: "enterprise", label: "企业" }
+    ];
+
+    async function api(path, opts) {
+      const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
+      const data = await resp.json().catch(function(){return {};});
+      if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      return data;
+    }
+
+    function typeLabel(code) {
+      const hit = clientTypes.find(function (t) { return t.code === code; });
+      return (hit && hit.label) || code || "—";
+    }
+
+    function typeOptions(selected) {
+      return clientTypes.map(function (t) {
+        return '<option value="' + t.code + '"' + (selected === t.code ? " selected" : "") + ">" +
+          AdminUI.esc(t.label) + "</option>";
+      }).join("");
+    }
+
+    function idHint(type) {
+      return type === "enterprise"
+        ? "统一社会信用代码（18 位）"
+        : "身份证号（18 位）";
+    }
+
+    function setFieldError(inputId, errId, message) {
+      const input = document.getElementById(inputId);
+      const err = document.getElementById(errId);
+      if (!input || !err) return;
+      if (message) {
+        input.classList.add("is-invalid");
+        err.hidden = false;
+        err.textContent = message;
+      } else {
+        input.classList.remove("is-invalid");
+        err.hidden = true;
+        err.textContent = "";
+      }
+    }
+
+    function validateIdNumber(clientType, raw) {
+      const value = (raw || "").trim().toUpperCase();
+      if (!value) {
+        return clientType === "enterprise"
+          ? "请填写统一社会信用代码"
+          : "请填写身份证号";
+      }
+      if (clientType === "person") {
+        if (value.length !== 18) return "身份证号须为 18 位";
+        if (!/^\d{17}[\dX]$/.test(value)) {
+          return "身份证号格式不正确（前 17 位为数字，末位为数字或 X）";
+        }
+        const weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+        const checkMap = "10X98765432";
+        let total = 0;
+        for (let i = 0; i < 17; i++) total += parseInt(value.charAt(i), 10) * weights[i];
+        if (checkMap.charAt(total % 11) !== value.charAt(17)) {
+          return "身份证号校验位不正确";
+        }
+        return "";
+      }
+      if (clientType === "enterprise") {
+        if (value.length !== 18) return "统一社会信用代码须为 18 位";
+        if (!/^[0-9A-HJ-NPQRTUWXY]{2}\d{6}[0-9A-HJ-NPQRTUWXY]{10}$/.test(value)) {
+          return "统一社会信用代码格式不正确（18 位，不含 I/O/Z/S/V）";
+        }
+        return "";
+      }
+      return "请选择客户类型";
+    }
+
+    function validateClientForm() {
+      const clientType = document.getElementById("f_type").value;
+      const name = document.getElementById("f_name").value.trim();
+      const idNumber = document.getElementById("f_id").value.trim();
+      let ok = true;
+      if (!clientType) {
+        setFieldError("f_type", "f_type_err", "请选择客户类型");
+        ok = false;
+      } else setFieldError("f_type", "f_type_err", "");
+      if (!name) {
+        setFieldError("f_name", "f_name_err", "请填写名称");
+        ok = false;
+      } else setFieldError("f_name", "f_name_err", "");
+      const idErr = validateIdNumber(clientType, idNumber);
+      setFieldError("f_id", "f_id_err", idErr);
+      if (idErr) ok = false;
+      return ok ? { name: name, client_type: clientType, id_number: idNumber.toUpperCase() } : null;
+    }
+
+    async function load() {
+      const data = await api("/api/admin/clients");
+      if (data.client_types && data.client_types.length) clientTypes = data.client_types;
+      const tb = document.querySelector("#tbl tbody");
+      tb.innerHTML = "";
+      (data.clients || []).forEach(function (c) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + AdminUI.esc(c.client_type_label || typeLabel(c.client_type)) +
+          "</td><td>" + AdminUI.esc(c.name) +
+          "</td><td>" + AdminUI.esc(c.id_number) +
+          "</td><td class='row-actions'></td>";
+        const actions = tr.querySelector(".row-actions");
+        function addBtn(text, fn) {
+          const b = document.createElement("button");
+          b.type = "button"; b.className = "btn-ghost"; b.textContent = text;
+          b.onclick = fn;
+          actions.appendChild(b);
+        }
+        addBtn("详情", function () { viewClient(c.id); });
+        addBtn("编辑", function () { editClient(c); });
+        addBtn("删除", function () { deleteClient(c); });
+        tb.appendChild(tr);
+      });
+    }
+
+    async function viewClient(id) {
+      const data = await api("/api/admin/clients/" + id);
+      const c = data.client;
+      AdminUI.openDrawer({
+        title: "客户详情",
+        body: '<div class="detail-block">' +
+          "<p>类型：" + AdminUI.esc(c.client_type_label || typeLabel(c.client_type)) + "</p>" +
+          "<p>名称：" + AdminUI.esc(c.name) + "</p>" +
+          "<p>识别号：" + AdminUI.esc(c.id_number) + "</p>" +
+          "<p class='muted'>创建时间：" + AdminUI.esc(c.created_at || "—") + "</p>" +
+          "<p class='muted'>更新时间：" + AdminUI.esc(c.updated_at || "—") + "</p>" +
+          "</div>",
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">关闭</button>' +
+          '<button type="button" class="btn-primary" id="d_edit">编辑</button>',
+        onReady: function () {
+          document.getElementById("d_edit").onclick = function () {
+            AdminUI.closeDrawer();
+            editClient(c);
+          };
+        }
+      });
+    }
+
+    function editClient(c) {
+      const isNew = !c;
+      const curType = (c && c.client_type) || "person";
+      AdminUI.openDrawer({
+        title: isNew ? "新建客户" : "编辑客户",
+        body: '<div class="form-grid">' +
+          '<p class="form-legend">标有 * 的为必填项</p>' +
+          '<label class="req">客户类型</label><select id="f_type">' + typeOptions(curType) + "</select>" +
+          '<p class="field-error" id="f_type_err" hidden></p>' +
+          '<label class="req">名称</label><input id="f_name" maxlength="100" value="' + AdminUI.esc(c && c.name || "") + '">' +
+          '<p class="field-error" id="f_name_err" hidden></p>' +
+          '<label class="req" id="f_id_label">识别号（' + idHint(curType) + '）</label>' +
+          '<input id="f_id" maxlength="18" value="' + AdminUI.esc(c && c.id_number || "") + '" autocomplete="off">' +
+          '<p class="field-hint" id="f_id_hint">个人填 18 位身份证号；企业填 18 位统一社会信用代码</p>' +
+          '<p class="field-error" id="f_id_err" hidden></p>' +
+          "</div>",
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
+          '<button type="button" class="btn-primary" id="f_save">保存</button>',
+        onReady: function () {
+          function syncIdLabel() {
+            const type = document.getElementById("f_type").value;
+            document.getElementById("f_id_label").textContent = "识别号（" + idHint(type) + "）";
+            document.getElementById("f_id_hint").textContent = type === "enterprise"
+              ? "须为 18 位统一社会信用代码（不含字母 I/O/Z/S/V）"
+              : "须为 18 位身份证号（末位可为 X）";
+            setFieldError("f_id", "f_id_err", "");
+          }
+          document.getElementById("f_type").onchange = syncIdLabel;
+          document.getElementById("f_name").onblur = function () {
+            const name = document.getElementById("f_name").value.trim();
+            setFieldError("f_name", "f_name_err", name ? "" : "请填写名称");
+          };
+          document.getElementById("f_id").onblur = function () {
+            const type = document.getElementById("f_type").value;
+            setFieldError("f_id", "f_id_err", validateIdNumber(type, document.getElementById("f_id").value));
+          };
+          document.getElementById("f_save").onclick = async function () {
+            try {
+              const payload = validateClientForm();
+              if (!payload) {
+                AdminUI.toast("请按提示完善必填项", false);
+                return;
+              }
+              if (isNew) {
+                await api("/api/admin/clients", { method: "POST", body: JSON.stringify(payload) });
+              } else {
+                await api("/api/admin/clients/" + c.id, { method: "PUT", body: JSON.stringify(payload) });
+              }
+              AdminUI.closeDrawer();
+              AdminUI.toast("已保存", true);
+              load();
+            } catch (e) { AdminUI.toast(e.message, false); }
+          };
+        }
+      });
+    }
+
+    async function deleteClient(c) {
+      const ok = await AdminUI.confirmAction({
+        title: "删除客户",
+        message: "确认删除客户「" + c.name + "」？若已关联案件，关联关系也会解除。",
+        okText: "删除",
+        danger: true
+      });
+      if (!ok) return;
+      try {
+        await api("/api/admin/clients/" + c.id, { method: "DELETE" });
+        AdminUI.toast("已删除", true);
+        load();
+      } catch (e) { AdminUI.toast(e.message, false); }
+    }
+
+    document.getElementById("btnNew").onclick = function () { editClient(null); };
+    (async function () {
+      if (!LegalMindAuth.requireLogin()) return;
+      base = await LegalMindAuth.mcpBase();
+      try { await load(); } catch (e) {
+        document.getElementById("status").textContent = e.message;
+        document.getElementById("status").className = "status-err";
+      }
+    })();
+  </script>
+</body>
+</html>

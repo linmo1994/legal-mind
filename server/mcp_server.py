@@ -393,9 +393,7 @@ class MCPServer:
         self._vector_service_init_error = [None]
         self._vector_service_init_lock = None
         try:
-            import signal
             import threading
-            from vector_service import VectorService
             
             # 使用线程和超时机制初始化向量化服务
             self._vector_service_instance = [None]
@@ -405,6 +403,7 @@ class MCPServer:
             def init_vector_service():
                 try:
                     print("[VectorService] 后台线程开始初始化向量化服务...")
+                    from vector_service import VectorService
                     service = VectorService()
                     with self._vector_service_init_lock:
                         self._vector_service_instance[0] = service
@@ -414,10 +413,10 @@ class MCPServer:
                     with self._vector_service_init_lock:
                         self._vector_service_init_error[0] = e
             
-            # 在单独线程中初始化，设置超时
+            # 在单独线程中初始化；导入也放线程内，避免主线程被 HF 下载卡住
             self._vector_service_init_thread = threading.Thread(target=init_vector_service, daemon=True)
             self._vector_service_init_thread.start()
-            self._vector_service_init_thread.join(timeout=30)  # 最多等待30秒
+            self._vector_service_init_thread.join(timeout=3)
             
             if self._vector_service_init_thread.is_alive():
                 print("[MCP Server] ⚠️  警告：向量化服务初始化超时（30秒），服务器继续启动")
@@ -1671,6 +1670,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if path == '/api/admin/cases' or path.startswith('/api/admin/cases/'):
             self._handle_rbac_api('POST')
             return
+        if path == '/api/admin/clients' or path.startswith('/api/admin/clients/'):
+            self._handle_rbac_api('POST')
+            return
         if path == '/api/skills':
             self._handle_skills_api('POST')
             return
@@ -2691,7 +2693,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
         elif path == '/api/auth/me':
             self._handle_rbac_api('GET')
-        elif path.startswith('/api/admin/users') or path.startswith('/api/admin/roles') or path.startswith('/api/admin/permissions') or path.startswith('/api/admin/cases'):
+        elif path.startswith('/api/admin/users') or path.startswith('/api/admin/roles') or path.startswith('/api/admin/permissions') or path.startswith('/api/admin/cases') or path.startswith('/api/admin/clients'):
             self._handle_rbac_api('GET')
         elif path.startswith('/api/sessions'):
             self._handle_session_api(path, method='GET')
@@ -2719,6 +2721,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         elif path.startswith('/api/skills/'):
             self._handle_skills_api('DELETE')
         elif path.startswith('/api/admin/cases/') and '/members/' in path:
+            self._handle_rbac_api('DELETE')
+        elif path.startswith('/api/admin/cases/'):
+            self._handle_rbac_api('DELETE')
+        elif path.startswith('/api/admin/clients/'):
             self._handle_rbac_api('DELETE')
         elif path.startswith('/api/admin/profiles/'):
             self._handle_admin_profiles_api('DELETE')
@@ -3346,7 +3352,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         path = self.path.split('?')[0]
         if path.startswith('/api/skills/'):
             self._handle_skills_api('PUT')
-        elif path.startswith('/api/admin/users/') or path.startswith('/api/admin/roles/') or path.startswith('/api/admin/permissions/') or path.startswith('/api/admin/cases/'):
+        elif path.startswith('/api/admin/users/') or path.startswith('/api/admin/roles/') or path.startswith('/api/admin/permissions/') or path.startswith('/api/admin/cases/') or path.startswith('/api/admin/clients/'):
             self._handle_rbac_api('PUT')
         elif path == '/api/admin/mcp-config':
             self._handle_mcp_config_api('PUT')
@@ -3430,6 +3436,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 mine = qs.get("mine", ["0"])[0] in ("1", "true", "True")
                 self._write_json(*api.list_cases(authz, mine=mine))
                 return
+            if path == "/api/admin/cases/next-no" and method == "GET":
+                case_type = qs.get("case_type", [""])[0]
+                self._write_json(*api.preview_case_no(authz, case_type))
+                return
             if path == "/api/admin/cases" and method == "POST":
                 self._write_json(*api.create_case(authz, body))
                 return
@@ -3451,6 +3461,29 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/admin/cases/") and method == "PUT":
                 case_id = int(path.rstrip("/").split("/")[-1])
                 self._write_json(*api.update_case(authz, case_id, body))
+                return
+            if path.startswith("/api/admin/cases/") and method == "DELETE" and "/members/" not in path:
+                case_id = int(path.rstrip("/").split("/")[-1])
+                self._write_json(*api.delete_case(authz, case_id))
+                return
+
+            if path == "/api/admin/clients" and method == "GET":
+                self._write_json(*api.list_clients(authz))
+                return
+            if path.startswith("/api/admin/clients/") and method == "GET":
+                client_id = int(path.rstrip("/").split("/")[-1])
+                self._write_json(*api.get_client(authz, client_id))
+                return
+            if path == "/api/admin/clients" and method == "POST":
+                self._write_json(*api.create_client(authz, body))
+                return
+            if path.startswith("/api/admin/clients/") and method == "PUT":
+                client_id = int(path.rstrip("/").split("/")[-1])
+                self._write_json(*api.update_client(authz, client_id, body))
+                return
+            if path.startswith("/api/admin/clients/") and method == "DELETE":
+                client_id = int(path.rstrip("/").split("/")[-1])
+                self._write_json(*api.delete_client(authz, client_id))
                 return
 
             self._write_json(404, {"error": "未找到接口"})

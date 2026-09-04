@@ -1,8 +1,30 @@
 // 首页功能实现
-const HOME_JS_VERSION = '2026.01.16-1';
+const HOME_JS_VERSION = '2026.09.04-rbac';
 console.log(`[HOME] home.js loaded, version=${HOME_JS_VERSION}`);
 let selectedFiles = [];
 let uploadedFileIds = []; // 存储已上传的文件ID映射 {fileIndex: fileId}
+
+function canOpenAdmin() {
+  if (!window.LegalMindAuth || !LegalMindAuth.getToken()) return false;
+  return LegalMindAuth.hasPerm('page.admin')
+    || LegalMindAuth.hasPerm('cap.user_manage')
+    || LegalMindAuth.hasPerm('cap.case_manage')
+    || LegalMindAuth.hasPerm('cap.role_manage');
+}
+
+function syncAdminEntry() {
+  const adminTab = document.getElementById('adminTab');
+  if (!adminTab) return;
+  adminTab.hidden = !canOpenAdmin();
+}
+
+function goPage(url) {
+  if (window.parent !== window && window.parent.loadPage) {
+    window.parent.loadPage(url);
+  } else {
+    window.location.href = url;
+  }
+}
 
 // 配置缓存（减少重复请求 config.json）
 const CONFIG_CACHE_KEY = 'config_cache_v1';
@@ -125,7 +147,7 @@ document.addEventListener('DOMContentLoaded', function() {
   if (historyTab) {
     historyTab.onclick = () => {
       console.log('点击历史记录Tab，跳转到多轮对话页');
-      const url = 'mcp_client.html';
+      const url = 'mcp_client.html?v=20260904wf';
       
       // 如果在iframe中，通过父窗口跳转；否则直接跳转
       if (window.parent !== window && window.parent.loadPage) {
@@ -136,6 +158,21 @@ document.addEventListener('DOMContentLoaded', function() {
         window.location.href = url;
       }
     };
+  }
+
+  const adminTab = document.getElementById('adminTab');
+  if (adminTab) {
+    adminTab.onclick = () => {
+      if (!canOpenAdmin()) {
+        goPage('login.html?next=admin.html');
+        return;
+      }
+      goPage('admin.html');
+    };
+  }
+  syncAdminEntry();
+  if (window.LegalMindAuth && LegalMindAuth.getToken()) {
+    LegalMindAuth.fetchMe().then(syncAdminEntry).catch(function () { syncAdminEntry(); });
   }
 
   // 文件上传按钮点击
@@ -619,7 +656,7 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('准备跳转，URL参数input:', userText);
         console.log('编码后的URL参数:', params.get('input'));
       }
-      const url = 'mcp_client.html' + (params.toString() ? '?' + params.toString() : '');
+      const url = 'mcp_client.html?v=20260904wf' + (params.toString() ? '&' + params.toString() : '');
       console.log('完整跳转URL:', url);
       
       // 如果在iframe中，通过父窗口跳转；否则直接跳转

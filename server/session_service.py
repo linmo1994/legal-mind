@@ -67,9 +67,15 @@ class SessionService:
                 role TEXT NOT NULL,
                 content TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
+                extra TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
             )
         """)
+        try:
+            cursor.execute("ALTER TABLE messages ADD COLUMN extra TEXT")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
         
         # 创建索引
         cursor.execute("""
@@ -223,7 +229,7 @@ class SessionService:
         
         return updated_session
     
-    def add_message(self, session_id: str, role: str, content: str) -> int:
+    def add_message(self, session_id: str, role: str, content: str, extra: Optional[Dict] = None) -> int:
         """
         添加消息到会话
         
@@ -258,10 +264,11 @@ class SessionService:
             """, (content, current_time, title, current_time, session_id))
             conn.commit()
         
+        extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
         cursor.execute("""
-            INSERT INTO messages (session_id, role, content, timestamp)
-            VALUES (?, ?, ?, ?)
-        """, (session_id, role, content, datetime.now().isoformat()))
+            INSERT INTO messages (session_id, role, content, timestamp, extra)
+            VALUES (?, ?, ?, ?, ?)
+        """, (session_id, role, content, datetime.now().isoformat(), extra_json))
         
         message_id = cursor.lastrowid
         conn.commit()
@@ -286,7 +293,7 @@ class SessionService:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT role, content, timestamp 
+            SELECT role, content, timestamp, extra
             FROM messages 
             WHERE session_id = ? 
             ORDER BY timestamp ASC
@@ -295,7 +302,24 @@ class SessionService:
         rows = cursor.fetchall()
         conn.close()
         
-        return [{'role': row['role'], 'content': row['content']} for row in rows]
+        messages = []
+        for row in rows:
+            item = {'role': row['role'], 'content': row['content']}
+            extra_raw = row['extra'] if 'extra' in row.keys() else None
+            if extra_raw:
+                try:
+                    extra = json.loads(extra_raw)
+                except (TypeError, json.JSONDecodeError):
+                    extra = None
+                if isinstance(extra, dict):
+                    if extra.get('artifact'):
+                        item['artifact'] = extra['artifact']
+                    if extra.get('file_ids'):
+                        item['file_ids'] = extra['file_ids']
+                    if extra.get('capabilities'):
+                        item['capabilities'] = extra['capabilities']
+            messages.append(item)
+        return messages
     
     def list_sessions(self, limit: int = 100) -> List[Dict]:
         """

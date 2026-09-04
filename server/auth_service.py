@@ -113,5 +113,7 @@ class AuthService:
             "username": user["username"],
             "display_name": user.get("display_name") or user["username"],
             "is_active": bool(user.get("is_active")),
+            "account_status": user.get("account_status") or "active",
+            "account_status_label": user.get("account_status_label") or "启动",
             "must_change_password": bool(user.get("must_change_password")),
         }
