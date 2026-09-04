@@ -5,6 +5,7 @@ MCP服务端实现
 """
 
 import json
+import os
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import uuid
@@ -355,6 +356,35 @@ class MCPServer:
         except Exception as e:
             print(f"[MCP Server] 警告：会话服务初始化失败: {e}")
             self.session_service = None
+
+        # RBAC / 认证
+        self.rbac_store = None
+        self.auth_service = None
+        self.rbac_service = None
+        self.rbac_api = None
+        try:
+            from auth_service import AuthService
+            from http_rbac_api import RbacHttpApi
+            from rbac_service import RbacService
+            from rbac_store import RbacStore
+            rbac_db = "./rbac.db"
+            try:
+                cfg_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    _cfg = json.load(f)
+                rbac_db = ((_cfg.get("auth") or {}).get("rbac_db")) or rbac_db
+            except Exception:
+                pass
+            self.rbac_store = RbacStore(rbac_db)
+            self.rbac_store.ensure_schema()
+            self.rbac_store.seed_defaults()
+            self.auth_service = AuthService(self.rbac_store)
+            self.auth_service.ensure_seed_director()
+            self.rbac_service = RbacService(self.rbac_store)
+            self.rbac_api = RbacHttpApi(self.rbac_store, self.auth_service, self.rbac_service)
+            print(f"[MCP Server] RBAC 服务初始化成功: {rbac_db}")
+        except Exception as e:
+            print(f"[MCP Server] 警告：RBAC 服务初始化失败: {e}")
         
         # 初始化向量化服务（使用超时机制，避免长时间阻塞）
         self.vector_service = None
@@ -1602,7 +1632,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         """处理CORS预检请求"""
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.send_header('Access-Control-Allow-Private-Network', 'true')
         self.send_header('Access-Control-Max-Age', '86400')
@@ -1627,6 +1657,31 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         # 检查是否是文件上传API
         if path == '/api/files/upload':
             self._handle_file_upload()
+            return
+
+        if path == '/api/orchestrate':
+            self._handle_orchestrate_api()
+            return
+        if path == '/api/auth/login' or path == '/api/auth/logout':
+            self._handle_rbac_api('POST')
+            return
+        if path == '/api/admin/users' or path.startswith('/api/admin/users/'):
+            self._handle_rbac_api('POST')
+            return
+        if path == '/api/admin/cases' or path.startswith('/api/admin/cases/'):
+            self._handle_rbac_api('POST')
+            return
+        if path == '/api/skills':
+            self._handle_skills_api('POST')
+            return
+        if path.startswith('/api/skills/'):
+            self._handle_skills_api('POST')
+            return
+        if path == '/api/admin/mcp-config':
+            self._handle_mcp_config_api('POST')
+            return
+        if path == '/api/admin/profiles' or path.startswith('/api/admin/profiles/'):
+            self._handle_admin_profiles_api('POST')
             return
         
         print(f"[DEBUG] 识别为MCP协议请求，路径: {path}")
@@ -1835,7 +1890,20 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 # 构建messages数组
                 messages = []
                 
-                # 1. 添加system消息
+                # 1. 添加system消息（Skill 与 MCP 提示词重叠时优先 Skill）
+                try:
+                    import os
+                    from skill_service import SkillService, ensure_skill_priority_in_prompt
+                    _skills_root = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "skills",
+                    )
+                    system_prompt = ensure_skill_priority_in_prompt(
+                        system_prompt or "",
+                        SkillService(_skills_root).list_skills(),
+                    )
+                except Exception as skill_exc:
+                    print(f"[DEBUG] Skill 优先说明注入失败: {skill_exc}")
                 if system_prompt:
                     messages.append({"role": "system", "content": system_prompt})
                     print(f"[DEBUG] 添加system消息，长度: {len(system_prompt)}")
@@ -2621,10 +2689,22 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
+        elif path == '/api/auth/me':
+            self._handle_rbac_api('GET')
+        elif path.startswith('/api/admin/users') or path.startswith('/api/admin/roles') or path.startswith('/api/admin/permissions') or path.startswith('/api/admin/cases'):
+            self._handle_rbac_api('GET')
         elif path.startswith('/api/sessions'):
             self._handle_session_api(path, method='GET')
         elif path.startswith('/api/files'):
             self._handle_file_api(path, method='GET')
+        elif path == '/api/skills' or path.startswith('/api/skills/'):
+            self._handle_skills_api('GET')
+        elif path == '/api/admin/mcp-config':
+            self._handle_mcp_config_api('GET')
+        elif path == '/api/admin/stats':
+            self._handle_admin_stats_api()
+        elif path == '/api/admin/profiles' or path.startswith('/api/admin/profiles/'):
+            self._handle_admin_profiles_api('GET')
         else:
             self.send_response(404)
             self.end_headers()
@@ -2636,6 +2716,12 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self._handle_session_api(path, method='DELETE')
         elif path.startswith('/api/files'):
             self._handle_file_api(path, method='DELETE')
+        elif path.startswith('/api/skills/'):
+            self._handle_skills_api('DELETE')
+        elif path.startswith('/api/admin/cases/') and '/members/' in path:
+            self._handle_rbac_api('DELETE')
+        elif path.startswith('/api/admin/profiles/'):
+            self._handle_admin_profiles_api('DELETE')
         else:
             self.send_response(404)
             self.end_headers()
@@ -2735,9 +2821,15 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         self.wfile.write(json.dumps({"error": "缺少role或content"}).encode('utf-8'))
                         return
                     
+                    extra = data.get('extra')
+                    if extra is None and data.get('artifact'):
+                        extra = {'artifact': data.get('artifact')}
+                    if extra is not None and not isinstance(extra, dict):
+                        extra = None
+
                     print(f"[DEBUG] 调用session_service.add_message...")
                     try:
-                        message_id = session_service.add_message(session_id, role, content)
+                        message_id = session_service.add_message(session_id, role, content, extra=extra)
                         print(f"[DEBUG] ✅ 消息已添加，message_id: {message_id}")
                     except Exception as e:
                         print(f"[ERROR] 添加消息失败: {e}")
@@ -3249,6 +3341,241 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
+
+    def do_PUT(self):
+        path = self.path.split('?')[0]
+        if path.startswith('/api/skills/'):
+            self._handle_skills_api('PUT')
+        elif path.startswith('/api/admin/users/') or path.startswith('/api/admin/roles/') or path.startswith('/api/admin/permissions/') or path.startswith('/api/admin/cases/'):
+            self._handle_rbac_api('PUT')
+        elif path == '/api/admin/mcp-config':
+            self._handle_mcp_config_api('PUT')
+        elif path.startswith('/api/admin/profiles/'):
+            self._handle_admin_profiles_api('PUT')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def _read_json_body(self) -> dict:
+        length = int(self.headers.get('Content-Length', 0))
+        raw = self.rfile.read(length) if length else b'{}'
+        if not raw:
+            return {}
+        return json.loads(raw.decode('utf-8'))
+
+    def _write_json(self, status: int, payload: dict):
+        body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Private-Network', 'true')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_rbac_api(self, method: str):
+        api = getattr(MCPHTTPHandler.server_instance, "rbac_api", None)
+        if not api:
+            self._write_json(503, {"error": "RBAC 服务未初始化"})
+            return
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(self.path)
+            path = parsed.path
+            qs = parse_qs(parsed.query or "")
+            authz = self.headers.get("Authorization")
+            body = {}
+            if method in ("POST", "PUT"):
+                body = self._read_json_body() or {}
+
+            if path == "/api/auth/login" and method == "POST":
+                self._write_json(*api.login(body))
+                return
+            if path == "/api/auth/logout" and method == "POST":
+                self._write_json(*api.logout(authz))
+                return
+            if path == "/api/auth/me" and method == "GET":
+                case_id = qs.get("case_id", [None])[0]
+                self._write_json(*api.me(authz, int(case_id) if case_id else None))
+                return
+
+            if path == "/api/admin/users" and method == "GET":
+                self._write_json(*api.list_users(authz))
+                return
+            if path == "/api/admin/users" and method == "POST":
+                self._write_json(*api.create_user(authz, body))
+                return
+            if path.startswith("/api/admin/users/") and method == "PUT":
+                user_id = int(path.rstrip("/").split("/")[-1])
+                self._write_json(*api.update_user(authz, user_id, body))
+                return
+
+            if path == "/api/admin/roles" and method == "GET":
+                self._write_json(*api.list_roles(authz))
+                return
+            if path.startswith("/api/admin/roles/") and method == "PUT":
+                code = path.rstrip("/").split("/")[-1]
+                self._write_json(*api.update_role(authz, code, body))
+                return
+
+            if path == "/api/admin/permissions" and method == "GET":
+                self._write_json(*api.list_permissions(authz))
+                return
+            if path.startswith("/api/admin/permissions/") and method == "PUT":
+                code = path.rstrip("/").split("/")[-1]
+                self._write_json(*api.update_permission(authz, code, body))
+                return
+
+            if path == "/api/admin/cases" and method == "GET":
+                mine = qs.get("mine", ["0"])[0] in ("1", "true", "True")
+                self._write_json(*api.list_cases(authz, mine=mine))
+                return
+            if path == "/api/admin/cases" and method == "POST":
+                self._write_json(*api.create_case(authz, body))
+                return
+            if path.startswith("/api/admin/cases/") and "/members/" in path and method == "DELETE":
+                parts = path.rstrip("/").split("/")
+                # /api/admin/cases/{id}/members/{user_id}
+                case_id = int(parts[4])
+                user_id = int(parts[6])
+                self._write_json(*api.remove_member(authz, case_id, user_id))
+                return
+            if path.endswith("/members") and method == "POST":
+                case_id = int(path.rstrip("/").split("/")[-2])
+                self._write_json(*api.add_member(authz, case_id, body))
+                return
+            if path.startswith("/api/admin/cases/") and method == "GET":
+                case_id = int(path.rstrip("/").split("/")[-1])
+                self._write_json(*api.get_case(authz, case_id))
+                return
+            if path.startswith("/api/admin/cases/") and method == "PUT":
+                case_id = int(path.rstrip("/").split("/")[-1])
+                self._write_json(*api.update_case(authz, case_id, body))
+                return
+
+            self._write_json(404, {"error": "未找到接口"})
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] rbac api: {e}\n{traceback.format_exc()}")
+            self._write_json(400, {"error": "RBAC 请求失败", "detail": str(e)})
+
+    def _handle_orchestrate_api(self):
+        try:
+            from http_api_extra import handle_orchestrate
+            body = self._read_json_body() or {}
+            want_stream = bool(body.get("stream")) or "stream=1" in (self.path or "")
+            if want_stream:
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+                self.send_header('Cache-Control', 'no-cache')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Private-Network', 'true')
+                self.end_headers()
+
+                def on_event(event):
+                    payload = json.dumps({"type": "step", **event}, ensure_ascii=False)
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+
+                result = handle_orchestrate(MCPHTTPHandler.server_instance, body, on_event=on_event)
+                done = json.dumps({"type": "done", "result": result}, ensure_ascii=False)
+                self.wfile.write(f"data: {done}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                return
+            result = handle_orchestrate(MCPHTTPHandler.server_instance, body)
+            self._write_json(200, result)
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] orchestrate: {e}\n{traceback.format_exc()}")
+            self._write_json(400, {"error": "任务编排失败", "detail": str(e)})
+
+    def _handle_skills_api(self, method: str):
+        try:
+            from http_api_extra import skill_id_from_path, skill_service
+            svc = skill_service()
+            path = self.path.split('?')[0]
+            sid = skill_id_from_path(path)
+            if method == 'GET':
+                if sid:
+                    self._write_json(200, svc.get(sid))
+                else:
+                    self._write_json(200, {"skills": svc.list_skills()})
+                return
+            if method == 'POST' and path.rstrip('/') == '/api/skills':
+                created = svc.create(self._read_json_body())
+                self._write_json(201, created)
+                return
+            if method == 'PUT' and sid:
+                updated = svc.update(sid, self._read_json_body())
+                self._write_json(200, updated)
+                return
+            if method == 'DELETE' and sid:
+                svc.delete(sid)
+                self._write_json(200, {"ok": True})
+                return
+            self._write_json(405, {"error": "method not allowed"})
+        except FileNotFoundError:
+            self._write_json(404, {"error": "skill not found"})
+        except Exception as e:
+            self._write_json(400, {"error": str(e)})
+
+    def _handle_admin_profiles_api(self, method: str):
+        try:
+            from http_api_extra import (
+                handle_profile_create,
+                handle_profile_delete,
+                handle_profile_get,
+                handle_profile_update,
+                profile_path_parts,
+                public_profiles,
+            )
+            path = self.path.split('?')[0]
+            parts = profile_path_parts(path)
+            if method == 'GET':
+                if path.rstrip('/') == '/api/admin/profiles':
+                    self._write_json(200, public_profiles())
+                    return
+                if parts:
+                    self._write_json(200, handle_profile_get(parts[0], parts[1]))
+                    return
+                self._write_json(404, {"error": "not found"})
+                return
+            if method == 'POST' and path.rstrip('/') == '/api/admin/profiles':
+                self._write_json(201, handle_profile_create(self._read_json_body()))
+                return
+            if method == 'PUT' and parts:
+                self._write_json(200, handle_profile_update(parts[0], parts[1], self._read_json_body()))
+                return
+            if method == 'DELETE' and parts:
+                self._write_json(200, handle_profile_delete(parts[0], parts[1]))
+                return
+            self._write_json(405, {"error": "method not allowed"})
+        except FileNotFoundError:
+            self._write_json(404, {"error": "profile not found"})
+        except ValueError as e:
+            self._write_json(400, {"error": str(e)})
+        except Exception as e:
+            self._write_json(400, {"error": str(e)})
+
+    def _handle_admin_stats_api(self):
+        try:
+            from http_api_extra import admin_overview_stats
+            self._write_json(200, admin_overview_stats(MCPHTTPHandler.server_instance))
+        except Exception as e:
+            self._write_json(500, {"error": str(e)})
+
+    def _handle_mcp_config_api(self, method: str):
+        try:
+            from http_api_extra import apply_mcp_config, public_mcp_config
+            if method == 'GET':
+                self._write_json(200, public_mcp_config())
+                return
+            if method in ('PUT', 'POST'):
+                self._write_json(200, apply_mcp_config(self._read_json_body()))
+                return
+            self._write_json(405, {"error": "method not allowed"})
+        except Exception as e:
+            self._write_json(400, {"error": str(e)})
     
     def log_message(self, format, *args):
         """禁用默认日志输出"""
