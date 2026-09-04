@@ -627,6 +627,9 @@ class RbacHttpApi:
                 name=(body.get("name") or "").strip(),
                 client_type=(body.get("client_type") or "").strip(),
                 id_number=(body.get("id_number") or "").strip(),
+                phone=body.get("phone"),
+                email=body.get("email"),
+                contact_name=body.get("contact_name"),
                 created_by=user["id"],
             )
         except ValueError as exc:
@@ -643,6 +646,9 @@ class RbacHttpApi:
                 name=body.get("name"),
                 client_type=body.get("client_type"),
                 id_number=body.get("id_number"),
+                phone=body.get("phone"),
+                email=body.get("email"),
+                contact_name=body.get("contact_name"),
             )
         except ValueError as exc:
             return _deny(400, str(exc))

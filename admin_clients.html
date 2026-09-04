@@ -23,7 +23,7 @@
     <p id="status" class="muted"></p>
     <button type="button" class="btn-primary" id="btnNew">新建客户</button>
     <table class="admin-table" id="tbl" style="width:100%;margin-top:12px;border-collapse:collapse;background:#fff;">
-      <thead><tr><th>类型</th><th>名称</th><th>识别号</th><th></th></tr></thead>
+      <thead><tr><th>类型</th><th>名称</th><th>识别号</th><th>联系电话</th><th>邮件</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
   </div>
@@ -78,6 +78,16 @@
       }
     }
 
+    function focusFirstInvalid() {
+      const first = document.querySelector(".form-grid .is-invalid");
+      if (first && typeof first.focus === "function") {
+        first.focus();
+        if (typeof first.scrollIntoView === "function") {
+          first.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        }
+      }
+    }
+
     function validateIdNumber(clientType, raw) {
       const value = (raw || "").trim().toUpperCase();
       if (!value) {
@@ -109,23 +119,102 @@
       return "请选择客户类型";
     }
 
+    function validatePhone(raw) {
+      const value = (raw || "").trim();
+      if (!value) return "请填写联系电话";
+      const compact = value.replace(/[\s\-()（）]/g, "");
+      if (!compact) return "请填写联系电话";
+      let digits = compact.replace(/\D/g, "");
+      if (compact.indexOf("+86") === 0) {
+        if (digits.indexOf("86") === 0) digits = digits.slice(2);
+      } else if (compact.indexOf("86") === 0 && digits.length > 11) {
+        digits = digits.slice(2);
+      }
+      if (!digits) return "联系电话格式不正确";
+      if (digits.charAt(0) === "1") {
+        if (digits.length < 11) return "手机号须为 11 位";
+        if (digits.length > 11) return "手机号不能超过 11 位";
+        if (!/^1[3-9]\d{9}$/.test(digits)) return "手机号格式不正确";
+        return "";
+      }
+      if (digits.charAt(0) === "0") {
+        if (digits.length < 10) return "座机号至少 10 位（含区号）";
+        if (digits.length > 12) return "座机号不能超过 12 位";
+        if (!/^0\d{2,3}\d{7,8}$/.test(digits)) return "座机号格式不正确";
+        return "";
+      }
+      if (digits.length < 7) return "联系电话至少 7 位数字";
+      if (digits.length > 15) return "联系电话不能超过 15 位数字";
+      if (!/^\d{7,15}$/.test(digits)) return "联系电话格式不正确";
+      return "";
+    }
+
+    function validateEmail(raw) {
+      const value = (raw || "").trim();
+      if (!value) return "";
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) return "邮箱格式不正确";
+      return "";
+    }
+
     function validateClientForm() {
       const clientType = document.getElementById("f_type").value;
       const name = document.getElementById("f_name").value.trim();
       const idNumber = document.getElementById("f_id").value.trim();
+      const phoneEl = document.getElementById("f_phone");
+      const emailEl = document.getElementById("f_email");
+      const contactEl = document.getElementById("f_contact");
+      const phone = phoneEl ? phoneEl.value.trim() : "";
+      const email = emailEl ? emailEl.value.trim() : "";
+      const contactName = contactEl ? contactEl.value.trim() : "";
       let ok = true;
+      let firstMsg = "";
+
       if (!clientType) {
         setFieldError("f_type", "f_type_err", "请选择客户类型");
         ok = false;
+        if (!firstMsg) firstMsg = "请选择客户类型";
       } else setFieldError("f_type", "f_type_err", "");
+
       if (!name) {
         setFieldError("f_name", "f_name_err", "请填写名称");
         ok = false;
+        if (!firstMsg) firstMsg = "请填写名称";
       } else setFieldError("f_name", "f_name_err", "");
+
       const idErr = validateIdNumber(clientType, idNumber);
       setFieldError("f_id", "f_id_err", idErr);
-      if (idErr) ok = false;
-      return ok ? { name: name, client_type: clientType, id_number: idNumber.toUpperCase() } : null;
+      if (idErr) {
+        ok = false;
+        if (!firstMsg) firstMsg = idErr;
+      }
+
+      const phoneErr = validatePhone(phone);
+      setFieldError("f_phone", "f_phone_err", phoneErr);
+      if (phoneErr) {
+        ok = false;
+        if (!firstMsg) firstMsg = phoneErr;
+      }
+
+      const emailErr = validateEmail(email);
+      setFieldError("f_email", "f_email_err", emailErr);
+      if (emailErr) {
+        ok = false;
+        if (!firstMsg) firstMsg = emailErr;
+      }
+
+      if (!ok) {
+        focusFirstInvalid();
+        return { error: firstMsg || "请按提示完善必填项" };
+      }
+      const payload = {
+        name: name,
+        client_type: clientType,
+        id_number: idNumber.toUpperCase(),
+        phone: phone,
+        email: email,
+        contact_name: clientType === "enterprise" ? contactName : ""
+      };
+      return { payload: payload };
     }
 
     async function load() {
@@ -138,6 +227,8 @@
         tr.innerHTML = "<td>" + AdminUI.esc(c.client_type_label || typeLabel(c.client_type)) +
           "</td><td>" + AdminUI.esc(c.name) +
           "</td><td>" + AdminUI.esc(c.id_number) +
+          "</td><td>" + AdminUI.esc(c.phone || "—") +
+          "</td><td>" + AdminUI.esc(c.email || "—") +
           "</td><td class='row-actions'></td>";
         const actions = tr.querySelector(".row-actions");
         function addBtn(text, fn) {
@@ -156,12 +247,16 @@
     async function viewClient(id) {
       const data = await api("/api/admin/clients/" + id);
       const c = data.client;
+      const isEnterprise = c.client_type === "enterprise";
       AdminUI.openDrawer({
         title: "客户详情",
         body: '<div class="detail-block">' +
           "<p>类型：" + AdminUI.esc(c.client_type_label || typeLabel(c.client_type)) + "</p>" +
           "<p>名称：" + AdminUI.esc(c.name) + "</p>" +
           "<p>识别号：" + AdminUI.esc(c.id_number) + "</p>" +
+          (isEnterprise ? "<p>负责人：" + AdminUI.esc(c.contact_name || "—") + "</p>" : "") +
+          "<p>联系电话：" + AdminUI.esc(c.phone || "—") + "</p>" +
+          "<p>邮件：" + AdminUI.esc(c.email || "—") + "</p>" +
           "<p class='muted'>创建时间：" + AdminUI.esc(c.created_at || "—") + "</p>" +
           "<p class='muted'>更新时间：" + AdminUI.esc(c.updated_at || "—") + "</p>" +
           "</div>",
@@ -182,7 +277,7 @@
       AdminUI.openDrawer({
         title: isNew ? "新建客户" : "编辑客户",
         body: '<div class="form-grid">' +
-          '<p class="form-legend">标有 * 的为必填项</p>' +
+          '<p class="form-legend">标有 * 的为必填项（含联系电话）；邮件可选。企业客户可填负责人。</p>' +
           '<label class="req">客户类型</label><select id="f_type">' + typeOptions(curType) + "</select>" +
           '<p class="field-error" id="f_type_err" hidden></p>' +
           '<label class="req">名称</label><input id="f_name" maxlength="100" value="' + AdminUI.esc(c && c.name || "") + '">' +
@@ -191,19 +286,33 @@
           '<input id="f_id" maxlength="18" value="' + AdminUI.esc(c && c.id_number || "") + '" autocomplete="off">' +
           '<p class="field-hint" id="f_id_hint">个人填 18 位身份证号；企业填 18 位统一社会信用代码</p>' +
           '<p class="field-error" id="f_id_err" hidden></p>' +
+          '<div id="f_contact_phone_block">' +
+            '<div id="f_contact_wrap">' +
+              '<label>负责人</label>' +
+              '<input id="f_contact" maxlength="100" value="' + AdminUI.esc(c && c.contact_name || "") + '">' +
+            "</div>" +
+            '<label class="req">联系电话</label>' +
+            '<input id="f_phone" maxlength="20" required value="' + AdminUI.esc(c && c.phone || "") + '" autocomplete="tel" placeholder="手机 11 位，或含区号座机">' +
+            '<p class="field-hint">必填；手机号 11 位，座机含区号 10–12 位</p>' +
+            '<p class="field-error" id="f_phone_err" hidden></p>' +
+          "</div>" +
+          '<label>邮件</label><input id="f_email" maxlength="120" type="email" value="' + AdminUI.esc(c && c.email || "") + '" autocomplete="email">' +
+          '<p class="field-error" id="f_email_err" hidden></p>' +
           "</div>",
         footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
           '<button type="button" class="btn-primary" id="f_save">保存</button>',
         onReady: function () {
-          function syncIdLabel() {
+          function syncTypeFields() {
             const type = document.getElementById("f_type").value;
             document.getElementById("f_id_label").textContent = "识别号（" + idHint(type) + "）";
             document.getElementById("f_id_hint").textContent = type === "enterprise"
               ? "须为 18 位统一社会信用代码（不含字母 I/O/Z/S/V）"
               : "须为 18 位身份证号（末位可为 X）";
+            document.getElementById("f_contact_wrap").hidden = type !== "enterprise";
             setFieldError("f_id", "f_id_err", "");
           }
-          document.getElementById("f_type").onchange = syncIdLabel;
+          document.getElementById("f_type").onchange = syncTypeFields;
+          syncTypeFields();
           document.getElementById("f_name").onblur = function () {
             const name = document.getElementById("f_name").value.trim();
             setFieldError("f_name", "f_name_err", name ? "" : "请填写名称");
@@ -212,13 +321,26 @@
             const type = document.getElementById("f_type").value;
             setFieldError("f_id", "f_id_err", validateIdNumber(type, document.getElementById("f_id").value));
           };
+          const phoneInput = document.getElementById("f_phone");
+          phoneInput.onblur = function () {
+            setFieldError("f_phone", "f_phone_err", validatePhone(phoneInput.value));
+          };
+          phoneInput.oninput = function () {
+            if (phoneInput.classList.contains("is-invalid")) {
+              setFieldError("f_phone", "f_phone_err", validatePhone(phoneInput.value));
+            }
+          };
+          document.getElementById("f_email").onblur = function () {
+            setFieldError("f_email", "f_email_err", validateEmail(document.getElementById("f_email").value));
+          };
           document.getElementById("f_save").onclick = async function () {
             try {
-              const payload = validateClientForm();
-              if (!payload) {
-                AdminUI.toast("请按提示完善必填项", false);
+              const result = validateClientForm();
+              if (result.error) {
+                AdminUI.toast(result.error, false);
                 return;
               }
+              const payload = result.payload;
               if (isNew) {
                 await api("/api/admin/clients", { method: "POST", body: JSON.stringify(payload) });
               } else {

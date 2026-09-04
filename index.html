@@ -12,8 +12,15 @@
     <nav class="nav-links">
       <button type="button" id="navLoginBtn" hidden>登录</button>
       <button type="button" id="navAdminBtn" hidden>管理后台</button>
-      <span id="navUserLabel" class="nav-user" hidden></span>
-      <button type="button" id="navLogoutBtn" hidden>退出</button>
+      <div id="navUserMenu" class="nav-user-menu" hidden>
+        <button type="button" id="navUserBtn" class="nav-user-btn" aria-haspopup="true" aria-expanded="false">
+          <span id="navUserLabel" class="nav-user-name"></span>
+          <span class="nav-user-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="navUserDropdown" class="nav-user-dropdown" hidden role="menu">
+          <button type="button" id="navLogoutBtn" role="menuitem">退出</button>
+        </div>
+      </div>
     </nav>
   </header>
   <main>
@@ -45,23 +52,33 @@
         || LegalMindAuth.hasPerm('cap.role_manage');
     }
 
+    function closeUserMenu() {
+      const menu = document.getElementById('navUserMenu');
+      const dropdown = document.getElementById('navUserDropdown');
+      const userBtn = document.getElementById('navUserBtn');
+      if (!menu || !dropdown || !userBtn) return;
+      menu.classList.remove('is-open');
+      dropdown.hidden = true;
+      userBtn.setAttribute('aria-expanded', 'false');
+    }
+
     function syncShellNav() {
       const loginBtn = document.getElementById('navLoginBtn');
       const adminBtn = document.getElementById('navAdminBtn');
-      const logoutBtn = document.getElementById('navLogoutBtn');
+      const userMenu = document.getElementById('navUserMenu');
       const userLabel = document.getElementById('navUserLabel');
       const loggedIn = !!(window.LegalMindAuth && LegalMindAuth.getToken());
       loginBtn.hidden = loggedIn;
-      logoutBtn.hidden = !loggedIn;
       adminBtn.hidden = !canOpenAdmin();
       if (loggedIn) {
         const s = LegalMindAuth.getSession();
-        const name = (s && s.user && (s.user.display_name || s.user.username)) || '';
-        userLabel.hidden = !name;
+        const name = (s && s.user && (s.user.display_name || s.user.username)) || '已登录';
         userLabel.textContent = name;
+        userMenu.hidden = false;
       } else {
-        userLabel.hidden = true;
         userLabel.textContent = '';
+        userMenu.hidden = true;
+        closeUserMenu();
       }
     }
 
@@ -71,11 +88,30 @@
     document.getElementById('navAdminBtn').onclick = function () {
       loadPage('admin.html');
     };
+    document.getElementById('navUserBtn').onclick = function (e) {
+      e.stopPropagation();
+      const menu = document.getElementById('navUserMenu');
+      const dropdown = document.getElementById('navUserDropdown');
+      const userBtn = document.getElementById('navUserBtn');
+      const open = dropdown.hidden;
+      menu.classList.toggle('is-open', open);
+      dropdown.hidden = !open;
+      userBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
     document.getElementById('navLogoutBtn').onclick = async function () {
+      closeUserMenu();
       if (window.LegalMindAuth) await LegalMindAuth.logout();
       syncShellNav();
       loadPage('home.html');
     };
+    document.addEventListener('click', function (e) {
+      const menu = document.getElementById('navUserMenu');
+      if (!menu || menu.hidden) return;
+      if (!menu.contains(e.target)) closeUserMenu();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeUserMenu();
+    });
     syncShellNav();
     if (window.LegalMindAuth && LegalMindAuth.getToken()) {
       LegalMindAuth.fetchMe().then(syncShellNav).catch(syncShellNav);

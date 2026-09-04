@@ -15,7 +15,9 @@ function canOpenAdmin() {
 function syncAdminEntry() {
   const adminTab = document.getElementById('adminTab');
   if (!adminTab) return;
-  adminTab.hidden = !canOpenAdmin();
+  // index.html 顶栏已有「管理后台」；首页嵌在壳层 iframe 内时不再重复展示
+  const inAppShell = window.parent !== window && !!(window.parent && window.parent.loadPage);
+  adminTab.hidden = inAppShell || !canOpenAdmin();
 }
 
 function goPage(url) {

@@ -159,7 +159,12 @@ class TestHttpRbacApi(unittest.TestCase):
             created_users.append(created["user"]["id"])
         st, client = self.api.create_client(
             hdr,
-            {"name": "王五", "client_type": "person", "id_number": "110101199002021111"},
+            {
+                "name": "王五",
+                "client_type": "person",
+                "id_number": "110101199002021111",
+                "phone": "13700137000",
+            },
         )
         self.assertEqual(st, 201)
         st, case_body = self.api.create_case(
@@ -246,6 +251,7 @@ class TestHttpRbacApi(unittest.TestCase):
                 "name": "张三",
                 "client_type": "person",
                 "id_number": "110101199001011237",
+                "phone": "13800138000",
             },
         )
         self.assertEqual(st, 201)
@@ -256,7 +262,12 @@ class TestHttpRbacApi(unittest.TestCase):
         st3, updated = self.api.update_client(
             hdr,
             created["client"]["id"],
-            {"name": "张三丰", "client_type": "person", "id_number": "110101199001011237"},
+            {
+                "name": "张三丰",
+                "client_type": "person",
+                "id_number": "110101199001011237",
+                "phone": "13800138000",
+            },
         )
         self.assertEqual(st3, 200)
         self.assertEqual(updated["client"]["name"], "张三丰")
@@ -266,6 +277,7 @@ class TestHttpRbacApi(unittest.TestCase):
                 "name": "李四",
                 "client_type": "person",
                 "id_number": "110101199001011237",
+                "phone": "13900139000",
             },
         )
         self.assertEqual(st4, 400)
@@ -275,20 +287,37 @@ class TestHttpRbacApi(unittest.TestCase):
                 "name": "短号",
                 "client_type": "person",
                 "id_number": "12345",
+                "phone": "13800138000",
             },
         )
         self.assertEqual(st_bad, 400)
         self.assertIn("18", bad.get("error", ""))
+        st_nophone, nophone = self.api.create_client(
+            hdr,
+            {
+                "name": "无电话",
+                "client_type": "person",
+                "id_number": "110101199003034416",
+            },
+        )
+        self.assertEqual(st_nophone, 400)
+        self.assertIn("电话", nophone.get("error", ""))
         st5, company = self.api.create_client(
             hdr,
             {
                 "name": "某某科技有限公司",
                 "client_type": "enterprise",
                 "id_number": "91110000MA01234567",
+                "phone": "010-88886666",
+                "email": "contact@example.com",
+                "contact_name": "王经理",
             },
         )
         self.assertEqual(st5, 201)
         self.assertEqual(company["client"]["client_type_label"], "企业")
+        self.assertEqual(company["client"]["phone"], "010-88886666")
+        self.assertEqual(company["client"]["email"], "contact@example.com")
+        self.assertEqual(company["client"]["contact_name"], "王经理")
         st6, deleted = self.api.delete_client(hdr, created["client"]["id"])
         self.assertEqual(st6, 200)
 

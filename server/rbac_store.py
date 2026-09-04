@@ -158,11 +158,75 @@ def validate_client_id_number(client_type: str, id_number: str) -> str:
     raise ValueError("客户类型须为个人或企业")
 
 
+def normalize_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def validate_client_phone(phone: Any) -> str:
+    value = normalize_optional_text(phone)
+    if not value:
+        raise ValueError("电话必填")
+    compact = re.sub(r"[\s\-()（）]", "", value)
+    if not compact:
+        raise ValueError("电话必填")
+    digits = re.sub(r"\D", "", compact)
+    if compact.startswith("+86"):
+        digits = digits[2:] if digits.startswith("86") else digits
+    elif compact.startswith("86") and len(digits) > 11:
+        digits = digits[2:]
+    if not digits:
+        raise ValueError("电话格式不正确")
+    if digits.startswith("1"):
+        if len(digits) < 11:
+            raise ValueError("手机号须为 11 位")
+        if len(digits) > 11:
+            raise ValueError("手机号不能超过 11 位")
+        if not re.fullmatch(r"1[3-9]\d{9}", digits):
+            raise ValueError("手机号格式不正确")
+        return value
+    if digits.startswith("0"):
+        if len(digits) < 10:
+            raise ValueError("座机号至少 10 位（含区号）")
+        if len(digits) > 12:
+            raise ValueError("座机号不能超过 12 位")
+        if not re.fullmatch(r"0\d{2,3}\d{7,8}", digits):
+            raise ValueError("座机号格式不正确")
+        return value
+    if len(digits) < 7:
+        raise ValueError("联系电话至少 7 位数字")
+    if len(digits) > 15:
+        raise ValueError("联系电话不能超过 15 位数字")
+    if not re.fullmatch(r"\d{7,15}", digits):
+        raise ValueError("电话格式不正确")
+    return value
+
+
+def validate_client_email(email: Any) -> Optional[str]:
+    value = normalize_optional_text(email)
+    if not value:
+        return None
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+        raise ValueError("邮箱格式不正确")
+    return value.lower()
+
+
 def enrich_client(row: Dict[str, Any]) -> Dict[str, Any]:
     item = dict(row)
     ctype = item.get("client_type")
     item["client_type_label"] = CLIENT_TYPE_LABELS.get(ctype or "", ctype or "")
+    item["phone"] = item.get("phone") or ""
+    item["email"] = item.get("email") or ""
+    item["contact_name"] = item.get("contact_name") or ""
     return item
+
+
+_CLIENT_COLUMNS = (
+    "id, name, client_type, id_number, phone, email, contact_name, "
+    "created_by, created_at, updated_at"
+)
 
 
 # 账号状态：code -> 中文名
@@ -319,6 +383,9 @@ class RbacStore:
                 name TEXT NOT NULL,
                 client_type TEXT NOT NULL,
                 id_number TEXT NOT NULL UNIQUE,
+                phone TEXT,
+                email TEXT,
+                contact_name TEXT,
                 created_by INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -340,6 +407,7 @@ class RbacStore:
         except sqlite3.OperationalError:
             pass
         self._ensure_user_account_status_column(cur)
+        self._ensure_client_contact_columns(cur)
         conn.commit()
         conn.close()
 
@@ -355,6 +423,17 @@ class RbacStore:
             cur.execute(
                 "UPDATE users SET account_status = 'locked' WHERE is_active = 0"
             )
+
+    def _ensure_client_contact_columns(self, cur: sqlite3.Cursor) -> None:
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(clients)").fetchall()}
+        if not cols:
+            return
+        if "phone" not in cols:
+            cur.execute("ALTER TABLE clients ADD COLUMN phone TEXT")
+        if "email" not in cols:
+            cur.execute("ALTER TABLE clients ADD COLUMN email TEXT")
+        if "contact_name" not in cols:
+            cur.execute("ALTER TABLE clients ADD COLUMN contact_name TEXT")
 
     def seed_defaults(self) -> None:
         conn = self._connect()
@@ -851,7 +930,8 @@ class RbacStore:
         conn = self._connect()
         rows = conn.execute(
             """
-            SELECT c.id, c.name, c.client_type, c.id_number, c.created_by, c.created_at, c.updated_at
+            SELECT c.id, c.name, c.client_type, c.id_number, c.phone, c.email, c.contact_name,
+                   c.created_by, c.created_at, c.updated_at
             FROM clients c
             JOIN case_clients cc ON cc.client_id = c.id
             WHERE cc.case_id = ?
@@ -950,10 +1030,7 @@ class RbacStore:
     def list_clients(self) -> List[Dict[str, Any]]:
         conn = self._connect()
         rows = conn.execute(
-            """
-            SELECT id, name, client_type, id_number, created_by, created_at, updated_at
-            FROM clients ORDER BY id DESC
-            """
+            f"SELECT {_CLIENT_COLUMNS} FROM clients ORDER BY id DESC"
         ).fetchall()
         conn.close()
         return [enrich_client(dict(r)) for r in rows]
@@ -961,10 +1038,7 @@ class RbacStore:
     def get_client(self, client_id: int) -> Optional[Dict[str, Any]]:
         conn = self._connect()
         row = conn.execute(
-            """
-            SELECT id, name, client_type, id_number, created_by, created_at, updated_at
-            FROM clients WHERE id = ?
-            """,
+            f"SELECT {_CLIENT_COLUMNS} FROM clients WHERE id = ?",
             (client_id,),
         ).fetchone()
         conn.close()
@@ -973,10 +1047,7 @@ class RbacStore:
     def get_client_by_id_number(self, id_number: str) -> Optional[Dict[str, Any]]:
         conn = self._connect()
         row = conn.execute(
-            """
-            SELECT id, name, client_type, id_number, created_by, created_at, updated_at
-            FROM clients WHERE id_number = ?
-            """,
+            f"SELECT {_CLIENT_COLUMNS} FROM clients WHERE id_number = ?",
             (id_number,),
         ).fetchone()
         conn.close()
@@ -988,6 +1059,9 @@ class RbacStore:
         client_type: str,
         id_number: str,
         created_by: Optional[int] = None,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+        contact_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         if client_type not in CLIENT_TYPE_CODES:
             raise ValueError("客户类型须为个人或企业")
@@ -997,16 +1071,24 @@ class RbacStore:
         id_number = validate_client_id_number(client_type, id_number)
         if self.get_client_by_id_number(id_number):
             raise ValueError("识别号已存在")
+        phone_v = validate_client_phone(phone)
+        email_v = validate_client_email(email)
+        contact_v = normalize_optional_text(contact_name)
+        if client_type != CLIENT_TYPE_ENTERPRISE:
+            contact_v = None
         now = datetime.now().isoformat()
         conn = self._connect()
         cur = conn.cursor()
         try:
             cur.execute(
                 """
-                INSERT INTO clients (name, client_type, id_number, created_by, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO clients (
+                    name, client_type, id_number, phone, email, contact_name,
+                    created_by, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (name, client_type, id_number, created_by, now, now),
+                (name, client_type, id_number, phone_v, email_v, contact_v, created_by, now, now),
             )
             conn.commit()
             client_id = cur.lastrowid
@@ -1022,6 +1104,9 @@ class RbacStore:
         name: Optional[str] = None,
         client_type: Optional[str] = None,
         id_number: Optional[str] = None,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+        contact_name: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         client = self.get_client(client_id)
         if not client:
@@ -1037,15 +1122,25 @@ class RbacStore:
         other = self.get_client_by_id_number(new_id)
         if other and other["id"] != client_id:
             raise ValueError("识别号已存在")
+        phone_v = validate_client_phone(phone if phone is not None else client.get("phone"))
+        email_v = validate_client_email(email if email is not None else client.get("email"))
+        if contact_name is not None:
+            contact_v = normalize_optional_text(contact_name)
+        else:
+            contact_v = normalize_optional_text(client.get("contact_name"))
+        if new_type != CLIENT_TYPE_ENTERPRISE:
+            contact_v = None
         now = datetime.now().isoformat()
         conn = self._connect()
         try:
             conn.execute(
                 """
-                UPDATE clients SET name = ?, client_type = ?, id_number = ?, updated_at = ?
+                UPDATE clients
+                SET name = ?, client_type = ?, id_number = ?, phone = ?, email = ?,
+                    contact_name = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (new_name, new_type, new_id, now, client_id),
+                (new_name, new_type, new_id, phone_v, email_v, contact_v, now, client_id),
             )
             conn.commit()
         except sqlite3.IntegrityError as exc:

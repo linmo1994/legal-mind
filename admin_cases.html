@@ -58,13 +58,79 @@
     .client-ms-empty { padding: 10px 12px; font-size: 13px; color: #6b7280; }
     .file-list { margin: 4px 0 10px; padding-left: 18px; font-size: 13px; }
     .file-list li { margin: 2px 0; }
-    .file-preview {
-      margin: 6px 0 0; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px;
-      background: #f8fafc; font-size: 12px; color: #374151;
+    .file-field { margin: 0 0 12px; }
+    .file-pick-list {
+      list-style: none; margin: 8px 0 0; padding: 0;
+      border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc;
     }
-    .file-preview ul { margin: 4px 0 0; padding-left: 18px; }
-    .file-preview li { margin: 2px 0; word-break: break-all; }
-    .existing-files { margin: 0 0 8px; }
+    .file-pick-list[hidden] { display: none; }
+    .file-pick-list li {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 8px 10px; border-bottom: 1px solid #e5e7eb; font-size: 13px; color: #111827;
+    }
+    .file-pick-list li:last-child { border-bottom: 0; }
+    .file-pick-list .file-pick-name { min-width: 0; word-break: break-all; }
+    .file-pick-list .file-pick-meta { color: #6b7280; font-size: 12px; white-space: nowrap; }
+    .file-pick-list button {
+      border: 0; background: transparent; color: #b91c1c; cursor: pointer;
+      font-size: 12px; padding: 0; flex-shrink: 0;
+    }
+    .file-pick-empty { margin: 6px 0 0; font-size: 12px; color: #9ca3af; }
+    .existing-files { margin: 0 0 12px; }
+    .file-card-list { list-style: none; margin: 6px 0 0; padding: 0; }
+    .file-card {
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+      padding: 10px 12px; margin: 0 0 8px; border: 1px solid #e5e7eb; border-radius: 8px;
+      background: #f8fafc;
+    }
+    .file-card-main { min-width: 0; flex: 1; }
+    .file-card-name { display: block; font-size: 13px; color: #111827; word-break: break-all; font-weight: 500; }
+    .file-card-meta { display: block; margin-top: 2px; font-size: 12px; color: #6b7280; }
+    .file-card-actions { display: flex; flex-shrink: 0; gap: 6px; }
+    .file-card-actions button,
+    .file-card-actions a {
+      border: 1px solid #d1d5db; background: #fff; color: #1a4a6e; border-radius: 6px;
+      padding: 4px 10px; font-size: 12px; cursor: pointer; text-decoration: none; line-height: 1.4;
+    }
+    .file-card-actions button:hover,
+    .file-card-actions a:hover { border-color: #1a4a6e; background: #eef6fb; }
+    .file-viewer-root {
+      position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center;
+      padding: 24px; box-sizing: border-box;
+    }
+    .file-viewer-root[hidden] { display: none; }
+    .file-viewer-backdrop {
+      position: absolute; inset: 0; background: rgba(15, 23, 42, 0.55);
+    }
+    .file-viewer-panel {
+      position: relative; z-index: 1; width: min(960px, 100%); height: min(88vh, 900px);
+      background: #fff; border-radius: 12px; display: flex; flex-direction: column; overflow: hidden;
+    }
+    .file-viewer-header {
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+      padding: 12px 16px; border-bottom: 1px solid #e5e7eb; flex-shrink: 0;
+    }
+    .file-viewer-header h3 {
+      margin: 0; font-size: 15px; color: #111827; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .file-viewer-body {
+      flex: 1; min-height: 0; background: #0f172a0d; overflow: auto;
+      display: flex; align-items: stretch; justify-content: center;
+    }
+    .file-viewer-body img {
+      max-width: 100%; max-height: 100%; object-fit: contain; margin: auto; display: block;
+    }
+    .file-viewer-body iframe,
+    .file-viewer-body embed {
+      width: 100%; height: 100%; border: 0; background: #fff;
+    }
+    .file-viewer-body pre {
+      margin: 0; padding: 16px; width: 100%; box-sizing: border-box;
+      white-space: pre-wrap; word-break: break-word; font-size: 13px; line-height: 1.5; color: #111827;
+    }
+    .file-viewer-fallback {
+      margin: auto; padding: 24px; text-align: center; color: #374151; font-size: 14px;
+    }
   </style>
 </head>
 <body class="admin-body" data-admin-page="cases">
@@ -123,24 +189,242 @@
       for (let i = 0; i < files.length; i++) ids.push(await uploadFile(files[i], description));
       return ids;
     }
-    function clampFileInput(input, maxCount) {
-      if (!input || !input.files || input.files.length <= maxCount) return true;
-      const dt = new DataTransfer();
-      for (let i = 0; i < maxCount; i++) dt.items.add(input.files[i]);
-      input.files = dt.files;
-      return false;
+    function formatFileSize(bytes) {
+      const n = Number(bytes) || 0;
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+      return (n / (1024 * 1024)).toFixed(1) + " MB";
     }
-    function validateUploadCounts(existingContract, existingEvidence) {
-      const contractInput = document.getElementById("c_contract");
-      const evidenceInput = document.getElementById("c_evidence");
-      const contractFiles = contractInput && !contractInput.disabled && contractInput.files
-        ? contractInput.files.length : 0;
-      const evidenceFiles = evidenceInput && !evidenceInput.disabled && evidenceInput.files
-        ? evidenceInput.files.length : 0;
-      if (existingContract + contractFiles > 1) {
+    function fileExt(name) {
+      const parts = String(name || "").split(".");
+      return parts.length > 1 ? parts.pop().toLowerCase() : "";
+    }
+    function ensureFileViewer() {
+      let root = document.getElementById("caseFileViewer");
+      if (root) return root;
+      root = document.createElement("div");
+      root.id = "caseFileViewer";
+      root.className = "file-viewer-root";
+      root.hidden = true;
+      root.innerHTML =
+        '<div class="file-viewer-backdrop" data-close-viewer="1"></div>' +
+        '<div class="file-viewer-panel" role="dialog" aria-modal="true" aria-labelledby="caseFileViewerTitle">' +
+          '<div class="file-viewer-header">' +
+            '<h3 id="caseFileViewerTitle">文件预览</h3>' +
+            '<div style="display:flex;gap:8px;flex-shrink:0;">' +
+              '<a class="btn-ghost" id="caseFileViewerDownload" target="_blank" rel="noopener">下载</a>' +
+              '<button type="button" class="btn-ghost" data-close-viewer="1">关闭</button>' +
+            "</div>" +
+          "</div>" +
+          '<div class="file-viewer-body" id="caseFileViewerBody"></div>' +
+        "</div>";
+      document.body.appendChild(root);
+      root.addEventListener("click", function (e) {
+        if (e.target && e.target.getAttribute && e.target.getAttribute("data-close-viewer")) {
+          closeFileViewer();
+        }
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && root && !root.hidden) closeFileViewer();
+      });
+      return root;
+    }
+    function closeFileViewer() {
+      const root = document.getElementById("caseFileViewer");
+      if (!root) return;
+      root.hidden = true;
+      const body = document.getElementById("caseFileViewerBody");
+      if (body) body.innerHTML = "";
+    }
+    async function openFileViewer(fileId, fallbackName) {
+      const root = ensureFileViewer();
+      const title = document.getElementById("caseFileViewerTitle");
+      const body = document.getElementById("caseFileViewerBody");
+      const dl = document.getElementById("caseFileViewerDownload");
+      title.textContent = "加载中…";
+      body.innerHTML = '<p class="file-viewer-fallback">正在加载文件…</p>';
+      dl.href = base + "/api/files/" + encodeURIComponent(fileId) + "/download";
+      root.hidden = false;
+      let info = {};
+      try {
+        info = await api("/api/files/" + encodeURIComponent(fileId));
+      } catch (e) {
+        info = { original_name: fallbackName || fileId };
+      }
+      const name = info.original_name || fallbackName || fileId;
+      const mime = String(info.mime_type || "").toLowerCase();
+      const ext = fileExt(name);
+      title.textContent = name;
+      dl.download = name;
+      const previewUrl = base + "/api/files/" + encodeURIComponent(fileId) + "/preview";
+      if (mime.indexOf("image/") === 0 || ["png", "jpg", "jpeg", "gif", "webp", "svg"].indexOf(ext) >= 0) {
+        body.innerHTML = '<img alt="' + AdminUI.esc(name) + '" src="' + previewUrl + '">';
+        return;
+      }
+      if (mime === "application/pdf" || ext === "pdf") {
+        body.innerHTML = '<iframe title="' + AdminUI.esc(name) + '" src="' + previewUrl + '"></iframe>';
+        return;
+      }
+      if (mime.indexOf("text/") === 0 || ["txt", "md", "csv", "log", "json", "html", "htm"].indexOf(ext) >= 0) {
+        if (info.text_content) {
+          body.innerHTML = "<pre></pre>";
+          body.querySelector("pre").textContent = info.text_content;
+          return;
+        }
+        try {
+          const resp = await fetch(previewUrl, { headers: LegalMindAuth.authHeaders() });
+          const text = await resp.text();
+          body.innerHTML = "<pre></pre>";
+          body.querySelector("pre").textContent = text;
+        } catch (e) {
+          body.innerHTML = '<div class="file-viewer-fallback">文本预览失败，请下载后查看。<br><a href="' +
+            previewUrl + '" target="_blank" rel="noopener">打开原文件</a></div>';
+        }
+        return;
+      }
+      if (info.text_content && String(info.text_content).trim()) {
+        body.innerHTML = "<pre></pre>";
+        body.querySelector("pre").textContent = info.text_content;
+        body.insertAdjacentHTML("afterbegin",
+          '<p class="file-viewer-fallback" style="padding:12px 16px 0;text-align:left;">已提取文本预览（原格式请下载查看）</p>');
+        return;
+      }
+      body.innerHTML =
+        '<div class="file-viewer-fallback">' +
+          "<p>该类型暂不支持页内预览（如 Word / ZIP）。</p>" +
+          '<p><a class="btn-primary" style="display:inline-block;margin-top:8px;padding:8px 14px;text-decoration:none;" href="' +
+            AdminUI.esc(dl.href) + '" target="_blank" rel="noopener">下载文件</a></p>' +
+        "</div>";
+    }
+    function fileListHtml(ids, label) {
+      if (!ids || !ids.length) {
+        return "<div class='existing-files'><p class='muted' style='margin:4px 0;'>" + label + "：暂无</p></div>";
+      }
+      return "<div class='existing-files'><p style='margin:4px 0 2px;font-size:13px;'><strong>" + label +
+        "</strong>（共 " + ids.length + " 份）</p><ul class='file-card-list'>" +
+        ids.map(function (id) {
+          return '<li class="file-card" data-file-id="' + AdminUI.esc(id) + '">' +
+            '<div class="file-card-main">' +
+              '<span class="file-card-name" data-fname>加载文件名…</span>' +
+              '<span class="file-card-meta" data-fmeta></span>' +
+            "</div>" +
+            '<div class="file-card-actions">' +
+              '<button type="button" data-view-file="' + AdminUI.esc(id) + '">查看</button>' +
+              '<a href="' + base + "/api/files/" + encodeURIComponent(id) + '/download" target="_blank" rel="noopener">下载</a>' +
+            "</div></li>";
+        }).join("") + "</ul></div>";
+    }
+    function existingFilesFormHtml(contractIds, evidenceIds) {
+      const parts = [];
+      if (contractIds && contractIds.length) parts.push(fileListHtml(contractIds, "已有委托合同"));
+      if (evidenceIds && evidenceIds.length) parts.push(fileListHtml(evidenceIds, "已有证据材料"));
+      if (!parts.length) return "";
+      return '<div id="c_existing_files">' + parts.join("") + "</div>";
+    }
+    async function hydrateFileCards(root) {
+      if (!root) return;
+      const cards = root.querySelectorAll(".file-card[data-file-id]");
+      for (let i = 0; i < cards.length; i++) {
+        const card = cards[i];
+        const id = card.getAttribute("data-file-id");
+        const nameEl = card.querySelector("[data-fname]");
+        const metaEl = card.querySelector("[data-fmeta]");
+        try {
+          const info = await api("/api/files/" + encodeURIComponent(id));
+          const name = info.original_name || id;
+          if (nameEl) nameEl.textContent = name;
+          if (metaEl) {
+            const bits = [];
+            if (info.file_type || info.mime_type) bits.push(info.file_type || info.mime_type);
+            if (info.file_size != null) bits.push(formatFileSize(info.file_size));
+            metaEl.textContent = bits.join(" · ");
+          }
+          const viewBtn = card.querySelector("[data-view-file]");
+          if (viewBtn) {
+            viewBtn.onclick = function () { openFileViewer(id, name); };
+          }
+        } catch (e) {
+          if (nameEl) nameEl.textContent = "（无法读取文件信息）";
+          const viewBtn = card.querySelector("[data-view-file]");
+          if (viewBtn) {
+            viewBtn.onclick = function () { openFileViewer(id, id); };
+          }
+        }
+      }
+    }
+    function fileKey(file) {
+      return [file.name, file.size, file.lastModified].join("::");
+    }
+    function bindFileField(opts) {
+      const input = document.getElementById(opts.inputId);
+      const list = document.getElementById(opts.listId);
+      const empty = document.getElementById(opts.emptyId);
+      if (!input || !list) return { getFiles: function () { return []; } };
+      let selected = [];
+      function syncInput() {
+        const dt = new DataTransfer();
+        selected.forEach(function (f) { dt.items.add(f); });
+        input.files = dt.files;
+      }
+      function render() {
+        if (!selected.length) {
+          list.innerHTML = "";
+          list.hidden = true;
+          if (empty) empty.hidden = false;
+          return;
+        }
+        list.hidden = false;
+        if (empty) empty.hidden = true;
+        list.innerHTML = selected.map(function (f, idx) {
+          return '<li data-idx="' + idx + '"><span class="file-pick-name">' + AdminUI.esc(f.name) +
+            '</span><span class="file-pick-meta">' + formatFileSize(f.size) +
+            '</span><button type="button" data-remove="' + idx + '">移除</button></li>';
+        }).join("");
+        list.querySelectorAll("[data-remove]").forEach(function (btn) {
+          btn.onclick = function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const idx = parseInt(btn.getAttribute("data-remove"), 10);
+            selected.splice(idx, 1);
+            syncInput();
+            render();
+          };
+        });
+      }
+      function ingestFromInput() {
+        const picked = input.files ? Array.prototype.slice.call(input.files) : [];
+        if (!opts.multiple) {
+          selected = picked.slice(0, 1);
+        } else {
+          const seen = {};
+          selected.forEach(function (f) { seen[fileKey(f)] = true; });
+          picked.forEach(function (f) {
+            const key = fileKey(f);
+            if (!seen[key]) {
+              seen[key] = true;
+              selected.push(f);
+            }
+          });
+          if (selected.length > opts.maxCount) {
+            selected = selected.slice(0, opts.maxCount);
+            AdminUI.toast("最多可选择 " + opts.maxCount + " 个文件，已自动截取", false);
+          }
+        }
+        syncInput();
+        render();
+      }
+      input.onchange = ingestFromInput;
+      render();
+      return {
+        getFiles: function () { return selected.slice(); },
+        count: function () { return selected.length; }
+      };
+    }
+    function validateUploadCounts(contractCount, evidenceCount, existingContract, existingEvidence) {
+      if (existingContract + contractCount > 1) {
         return "委托合同最多上传 1 份文件";
       }
-      if (existingEvidence + evidenceFiles > 10) {
+      if (existingEvidence + evidenceCount > 10) {
         return "证据材料最多上传 10 份文件（含已有材料）";
       }
       return "";
@@ -312,56 +596,6 @@
       const hit = (members || []).find(function (m) { return m.role_code === role; });
       return hit ? hit.user_id : "";
     }
-    function fileListHtml(ids, label) {
-      if (!ids || !ids.length) {
-        return "<div class='existing-files'><p class='muted' style='margin:4px 0;'>" + label + "：暂无</p></div>";
-      }
-      return "<div class='existing-files'><p style='margin:4px 0 2px;font-size:13px;'><strong>" + label +
-        "</strong>（共 " + ids.length + " 份）</p><ol class='file-list'>" +
-        ids.map(function (id) {
-          return "<li><a href='" + base + "/api/files/" + encodeURIComponent(id) + "/download' target='_blank' rel='noopener' data-fid='" +
-            AdminUI.esc(id) + "'>加载文件名…</a></li>";
-        }).join("") + "</ol></div>";
-    }
-    function existingFilesFormHtml(contractIds, evidenceIds) {
-      const parts = [];
-      if (contractIds && contractIds.length) parts.push(fileListHtml(contractIds, "已有委托合同"));
-      if (evidenceIds && evidenceIds.length) parts.push(fileListHtml(evidenceIds, "已有证据材料"));
-      if (!parts.length) return "";
-      return '<div id="c_existing_files">' + parts.join("") + "</div>";
-    }
-    function selectedFilesPreviewHtml(files) {
-      if (!files || !files.length) return "";
-      return "<div class='file-preview'><strong>本次已选 " + files.length + " 个文件</strong><ul>" +
-        Array.prototype.map.call(files, function (f, i) {
-          return "<li>" + (i + 1) + ". " + AdminUI.esc(f.name || ("文件" + (i + 1))) + "</li>";
-        }).join("") + "</ul></div>";
-    }
-    function renderSelectedPreview(inputId, previewId) {
-      const input = document.getElementById(inputId);
-      const box = document.getElementById(previewId);
-      if (!box) return;
-      if (!input || !input.files || !input.files.length) {
-        box.innerHTML = "";
-        return;
-      }
-      box.innerHTML = selectedFilesPreviewHtml(input.files);
-    }
-    async function resolveFileNames(root) {
-      if (!root) return;
-      const links = root.querySelectorAll("a[data-fid]");
-      for (let i = 0; i < links.length; i++) {
-        const id = links[i].getAttribute("data-fid");
-        try {
-          const info = await api("/api/files/" + encodeURIComponent(id));
-          const name = info.original_name || id;
-          links[i].textContent = name;
-          links[i].title = name;
-        } catch (e) {
-          links[i].textContent = "（无法读取文件名，仍可下载）";
-        }
-      }
-    }
     async function refreshCaseNoPreview() {
       const type = document.getElementById("c_type").value;
       const preview = document.getElementById("c_no");
@@ -445,7 +679,7 @@
         footer: '<button type="button" class="btn-ghost" data-close="drawer">关闭</button>' +
           '<button type="button" class="btn-primary" id="d_edit">编辑</button>',
         onReady: function () {
-          resolveFileNames(document.getElementById("detailFiles"));
+          hydrateFileCards(document.getElementById("detailFiles"));
           document.getElementById("d_edit").onclick = function () {
             AdminUI.closeDrawer();
             editCase(caseId);
@@ -491,14 +725,16 @@
           "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:14px 0;\">" +
           existingFilesBlock +
           (contractSlots
-            ? "<label>" + contractLabel + "</label>" +
+            ? '<div class="file-field"><label>' + contractLabel + "</label>" +
               "<input id=\"c_contract\" type=\"file\" accept=\".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip\">" +
-              "<div id=\"c_contract_preview\"></div>"
+              '<p class="file-pick-empty" id="c_contract_empty">尚未选择委托合同</p>' +
+              '<ul class="file-pick-list" id="c_contract_list" hidden></ul></div>'
             : "<input id=\"c_contract\" type=\"file\" disabled hidden>") +
           (evidenceSlots
-            ? "<label>" + evidenceLabel + "</label>" +
+            ? '<div class="file-field"><label>' + evidenceLabel + "</label>" +
               "<input id=\"c_evidence\" type=\"file\" multiple accept=\".pdf,.doc,.docx,.png,.jpg,.jpeg,.zip,.txt\">" +
-              "<div id=\"c_evidence_preview\"></div>"
+              '<p class="file-pick-empty" id="c_evidence_empty">尚未选择证据材料；可多次添加，最多 ' + evidenceSlots + " 份</p>" +
+              '<ul class="file-pick-list" id="c_evidence_list" hidden></ul></div>'
             : "<input id=\"c_evidence\" type=\"file\" multiple disabled hidden>") +
           "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:14px 0;\">" +
           "<p class=\"form-legend\">合伙人、主办律师必填且须为不同用户；助理可选</p>" +
@@ -514,23 +750,26 @@
         onReady: function () {
           bindClientPicker(selectedClientIds);
           if (document.getElementById("c_existing_files")) {
-            resolveFileNames(document.getElementById("c_existing_files"));
+            hydrateFileCards(document.getElementById("c_existing_files"));
           }
-          const contractInput = document.getElementById("c_contract");
-          if (contractInput && !contractInput.disabled) {
-            contractInput.onchange = function () {
-              renderSelectedPreview("c_contract", "c_contract_preview");
-            };
-          }
-          const evidenceInput = document.getElementById("c_evidence");
-          if (evidenceInput && !evidenceInput.disabled) {
-            evidenceInput.onchange = function () {
-              if (!clampFileInput(evidenceInput, evidenceSlots)) {
-                AdminUI.toast("证据材料最多再选 " + evidenceSlots + " 份，已自动截取", false);
-              }
-              renderSelectedPreview("c_evidence", "c_evidence_preview");
-            };
-          }
+          const contractField = contractSlots
+            ? bindFileField({
+                inputId: "c_contract",
+                listId: "c_contract_list",
+                emptyId: "c_contract_empty",
+                maxCount: 1,
+                multiple: false
+              })
+            : { count: function () { return 0; } };
+          const evidenceField = evidenceSlots
+            ? bindFileField({
+                inputId: "c_evidence",
+                listId: "c_evidence_list",
+                emptyId: "c_evidence_empty",
+                maxCount: evidenceSlots,
+                multiple: true
+              })
+            : { count: function () { return 0; } };
           function setErr(id, errId, msg) {
             const el = document.getElementById(id);
             const err = document.getElementById(errId);
@@ -573,7 +812,12 @@
                 AdminUI.toast("请按提示完善必填项", false);
                 return;
               }
-              const uploadErr = validateUploadCounts(existingContractCount, existingEvidenceCount);
+              const uploadErr = validateUploadCounts(
+                contractField.count(),
+                evidenceField.count(),
+                existingContractCount,
+                existingEvidenceCount
+              );
               if (uploadErr) {
                 AdminUI.toast(uploadErr, false);
                 return;
