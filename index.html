@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LegalMind（MCP）</title>
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <header class="navbar">
+    <div class="logo"></div>
+    <nav class="nav-links">
+      <button onclick="loadPage('vectorize.html')">向量化文档</button>
+    </nav>
+  </header>
+  <main>
+    <iframe id="mainFrame" src="home.html" frameborder="0"></iframe>
+  </main>
+  <script>
+    // 添加消息监听器，避免浏览器扩展通信错误
+    // 当页面包含iframe时，某些扩展会尝试通信，如果没有监听器会导致错误
+    window.addEventListener('message', function(event) {
+      // 忽略来自浏览器扩展的消息（避免 "Receiving end does not exist" 错误）
+      if (event.origin && event.origin.startsWith('chrome-extension://')) {
+        return;
+      }
+      // 可以在这里处理来自iframe的消息（如果需要）
+      if (event.data && event.data.type) {
+        console.log('收到来自iframe的消息:', event.data);
+      }
+    }, false);
+    
+    function loadPage(page) {
+      const sep = page.includes('?') ? '&' : '?';
+      document.getElementById('mainFrame').src = page + sep + 't=' + Date.now();
+    }
+  </script>
+</body>
+</html> 

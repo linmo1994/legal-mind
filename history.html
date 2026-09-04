@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>历史案件 - LegalMind</title>
+  <link rel="stylesheet" href="history.css">
+</head>
+<body>
+  <div class="container">
+    <h2>历史案件</h2>
+    <div class="search-section">
+      <input type="text" id="searchInput" placeholder="输入案号、当事人等关键词搜索">
+      <button id="searchBtn">搜索</button>
+    </div>
+    <div class="case-list" id="caseList">
+      <!-- 案件卡片将动态插入 -->
+    </div>
+  </div>
+  <script>
+    const caseData = [
+      { id: 1, caseNo: '2024-001', parties: '张三诉李四', result: '已判决', summary: '合同纠纷，判决驳回原告诉讼请求。' },
+      { id: 2, caseNo: '2024-002', parties: '王五诉赵六', result: '已判决', summary: '借贷纠纷，建议调解。' },
+      { id: 3, caseNo: '2024-003', parties: '孙七诉周八', result: '处理中', summary: '交通事故责任纠纷。' }
+    ];
+    const list = document.getElementById('caseList');
+    const searchInput = document.getElementById('searchInput');
+    const searchBtn = document.getElementById('searchBtn');
+
+    function renderList(data) {
+      list.innerHTML = '';
+      if (data.length === 0) {
+        list.innerHTML = '<div class="empty">未找到相关案件</div>';
+        return;
+      }
+      data.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'case-card';
+        card.innerHTML = `
+          <div class="case-header">
+            <span class="case-no">案号：${item.caseNo}</span>
+            <span class="case-status">${item.result}</span>
+          </div>
+          <div class="case-parties">${item.parties}</div>
+          <div class="case-summary">${item.summary}</div>
+          <button class="detail-btn" data-id="${item.id}">查看详情</button>
+        `;
+        list.appendChild(card);
+      });
+      document.querySelectorAll('.detail-btn').forEach(btn => {
+        btn.onclick = () => {
+          alert('详情功能为原型演示');
+        };
+      });
+    }
+    function doSearch() {
+      const kw = searchInput.value.trim();
+      if (!kw) {
+        renderList(caseData);
+        return;
+      }
+      const filtered = caseData.filter(item =>
+        item.caseNo.includes(kw) || item.parties.includes(kw) || item.summary.includes(kw)
+      );
+      renderList(filtered);
+    }
+    searchBtn.onclick = doSearch;
+    searchInput.onkeydown = e => { if (e.key === 'Enter') doSearch(); };
+    renderList(caseData);
+  </script>
+</body>
+</html> 

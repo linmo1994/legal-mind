@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>我的名片 - LegalMind</title>
+  <link rel="stylesheet" href="business_card.css">
+</head>
+<body>
+  <div class="card-container">
+    <!-- 名片主体 -->
+    <div class="business-card">
+      <!-- 顶部装饰条 -->
+      <div class="card-header"></div>
+      
+      <!-- 律师信息区域 -->
+      <div class="card-body">
+        <!-- 头像和基本信息 -->
+        <div class="profile-section">
+          <div class="avatar-wrapper">
+            <img src="https://via.placeholder.com/120" alt="律师头像" class="avatar" id="lawyerAvatar">
+            <div class="verified-badge">✓</div>
+          </div>
+          <h1 class="lawyer-name" id="lawyerName">张正义</h1>
+          <p class="lawyer-title" id="lawyerTitle">高级合伙人 · 执业律师</p>
+          <p class="law-firm" id="lawFirm">正义律师事务所</p>
+        </div>
+
+        <!-- 专业领域标签 -->
+        <div class="expertise-section">
+          <div class="expertise-tags" id="expertiseTags">
+            <span class="tag">合同纠纷</span>
+            <span class="tag">公司法务</span>
+            <span class="tag">知识产权</span>
+            <span class="tag">劳动争议</span>
+          </div>
+        </div>
+
+        <!-- 联系方式 -->
+        <div class="contact-section">
+          <div class="contact-item" data-type="phone">
+            <div class="contact-icon">📞</div>
+            <div class="contact-info">
+              <span class="contact-label">电话</span>
+              <span class="contact-value" id="phoneNumber">138-0000-8888</span>
+            </div>
+            <button class="action-btn" onclick="copyContact('phone')" title="复制电话">📋</button>
+            <a href="tel:13800008888" class="action-btn call-btn" onclick="callPhone(event)" title="拨打电话">📞</a>
+          </div>
+          
+          <div class="contact-item" data-type="email">
+            <div class="contact-icon">✉️</div>
+            <div class="contact-info">
+              <span class="contact-label">邮箱</span>
+              <span class="contact-value" id="emailAddress">zhang@justice-law.com</span>
+            </div>
+            <button class="action-btn" onclick="copyContact('email')" title="复制邮箱">📋</button>
+          </div>
+
+          <div class="contact-item" data-type="address">
+            <div class="contact-icon">📍</div>
+            <div class="contact-info">
+              <span class="contact-label">地址</span>
+              <span class="contact-value" id="officeAddress">北京市朝阳区正义大厦18层</span>
+            </div>
+            <button class="action-btn" onclick="copyContact('address')" title="复制地址">📋</button>
+          </div>
+        </div>
+
+        <!-- 二维码分享 -->
+        <div class="qr-section">
+          <div class="qr-code" id="qrCode">
+            <canvas id="qrCanvas"></canvas>
+          </div>
+          <p class="qr-hint">扫描二维码保存名片</p>
+        </div>
+
+        <!-- 快捷操作按钮 -->
+        <div class="action-buttons">
+          <button class="primary-btn" onclick="saveToContacts()">
+            <span class="btn-icon">💾</span>
+            <span>保存到通讯录</span>
+          </button>
+          <button class="primary-btn" onclick="shareCard()">
+            <span class="btn-icon">📤</span>
+            <span>分享名片</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI智能推荐区域 -->
+    <div class="ai-section">
+      <div class="ai-header">
+        <div class="ai-icon">🤖</div>
+        <h3>AI智能推荐</h3>
+      </div>
+      <div class="ai-content">
+        <p class="ai-description">根据您的专业领域和案例经验，AI为您推荐以下服务：</p>
+        <div class="ai-recommendations" id="aiRecommendations">
+          <div class="recommendation-item">
+            <span class="rec-icon">⚖️</span>
+            <div class="rec-content">
+              <strong>合同审查服务</strong>
+              <p>基于您丰富的合同纠纷经验，AI可协助快速审查合同条款</p>
+            </div>
+          </div>
+          <div class="recommendation-item">
+            <span class="rec-icon">📊</span>
+            <div class="rec-content">
+              <strong>案例匹配分析</strong>
+              <p>AI可为您匹配相似案例，提供参考判例和胜诉策略</p>
+            </div>
+          </div>
+        </div>
+        <button class="ai-btn" onclick="openAIService()">
+          <span>体验AI服务</span>
+          <span class="arrow">→</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 成就展示（可选，简洁版） -->
+    <div class="achievement-section">
+      <h3 class="section-title">专业成就</h3>
+      <div class="achievement-grid">
+        <div class="achievement-item">
+          <div class="achievement-number">15+</div>
+          <div class="achievement-label">执业年限</div>
+        </div>
+        <div class="achievement-item">
+          <div class="achievement-number">500+</div>
+          <div class="achievement-label">成功案例</div>
+        </div>
+        <div class="achievement-item">
+          <div class="achievement-number">98%</div>
+          <div class="achievement-label">客户满意度</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 复制联系方式
+    function copyContact(type) {
+      let text = '';
+      const items = {
+        phone: document.getElementById('phoneNumber').textContent,
+        email: document.getElementById('emailAddress').textContent,
+        address: document.getElementById('officeAddress').textContent
+      };
+      
+      if (!items[type]) {
+        showToast('获取信息失败');
+        return;
+      }
+      
+      text = items[type];
+      
+      // 使用现代 Clipboard API
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast('已复制到剪贴板');
+        }).catch(err => {
+          console.error('复制失败:', err);
+          showToast('复制失败，请重试');
+        });
+      } else {
+        // 降级方案
+        try {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          const success = document.execCommand('copy');
+          document.body.removeChild(textarea);
+          if (success) {
+            showToast('已复制到剪贴板');
+          } else {
+            showToast('复制失败，请手动复制');
+          }
+        } catch (err) {
+          console.error('复制失败:', err);
+          showToast('复制失败，请手动复制');
+        }
+      }
+    }
+
+    // 拨打电话
+    function callPhone(event) {
+      event.preventDefault();
+      const phoneElement = document.getElementById('phoneNumber');
+      if (phoneElement) {
+        const phone = phoneElement.textContent.replace(/[-\s]/g, '');
+        // 验证电话号码格式
+        if (/^1[3-9]\d{9}$/.test(phone)) {
+          window.location.href = `tel:${phone}`;
+        } else {
+          showToast('电话号码格式不正确');
+        }
+      } else {
+        showToast('无法获取电话号码');
+      }
+    }
+
+    // 保存到通讯录
+    function saveToContacts() {
+      try {
+        const nameElement = document.getElementById('lawyerName');
+        const phoneElement = document.getElementById('phoneNumber');
+        const emailElement = document.getElementById('emailAddress');
+        const firmElement = document.getElementById('lawFirm');
+        
+        if (!nameElement || !phoneElement || !emailElement || !firmElement) {
+          showToast('获取信息失败');
+          return;
+        }
+        
+        // 转义vCard特殊字符
+        const escapeVCard = (str) => {
+          return str.replace(/\\/g, '\\\\')
+                    .replace(/,/g, '\\,')
+                    .replace(/;/g, '\\;')
+                    .replace(/\n/g, '\\n')
+                    .replace(/\r/g, '');
+        };
+        
+        const name = escapeVCard(nameElement.textContent.trim());
+        const phone = phoneElement.textContent.replace(/[-\s]/g, '');
+        const email = escapeVCard(emailElement.textContent.trim());
+        const firm = escapeVCard(firmElement.textContent.trim());
+        
+        // 创建 vCard 格式
+        const vcard = `BEGIN:VCARD
+VERSION:3.0
+FN:${name}
+TEL;TYPE=CELL:${phone}
+EMAIL:${email}
+ORG:${firm}
+END:VCARD`;
+        
+        // 创建下载链接
+        const blob = new Blob([vcard], { type: 'text/vcard;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        // 转义文件名中的特殊字符
+        const safeName = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').substring(0, 50); // 限制文件名长度
+        link.download = `${safeName}_名片.vcf`;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        
+        try {
+          link.click();
+          // 延迟清理，确保下载开始
+          setTimeout(() => {
+            try {
+              if (link.parentNode) {
+                document.body.removeChild(link);
+              }
+              URL.revokeObjectURL(url);
+            } catch (err) {
+              console.warn('清理下载链接失败:', err);
+            }
+          }, 100);
+        } catch (err) {
+          console.error('触发下载失败:', err);
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+          showToast('下载失败，请使用右键另存为');
+        }
+        
+        showToast('名片已保存，请在通讯录中导入');
+      } catch (err) {
+        console.error('保存失败:', err);
+        showToast('保存失败，请重试');
+      }
+    }
+
+    // 分享名片
+    function shareCard() {
+      if (navigator.share) {
+        const nameElement = document.getElementById('lawyerName');
+        const title = nameElement ? nameElement.textContent + ' - 律师名片' : '律师名片';
+        navigator.share({
+          title: title,
+          text: '查看我的律师名片',
+          url: window.location.href
+        }).catch(err => {
+          // 用户取消分享不算错误
+          if (err.name !== 'AbortError') {
+            console.error('分享失败:', err);
+            // 降级到复制链接
+            copyTextToClipboard(window.location.href);
+          }
+        });
+      } else {
+        // 降级方案：复制链接
+        copyTextToClipboard(window.location.href);
+      }
+    }
+
+    // 复制文本到剪贴板（辅助函数）
+    function copyTextToClipboard(text) {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast('名片链接已复制，可分享给他人');
+        }).catch(err => {
+          console.error('复制失败:', err);
+          showToast('复制失败，请手动复制链接');
+        });
+      } else {
+        try {
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          const success = document.execCommand('copy');
+          document.body.removeChild(textarea);
+          if (success) {
+            showToast('名片链接已复制，可分享给他人');
+          } else {
+            showToast('复制失败，请手动复制链接');
+          }
+        } catch (err) {
+          console.error('复制失败:', err);
+          showToast('复制失败，请手动复制链接');
+        }
+      }
+    }
+
+    // 打开AI服务
+    function openAIService() {
+      // 这里可以跳转到AI分析页面或打开AI服务弹窗
+      if (window.parent && window.parent.loadPage) {
+        window.parent.loadPage('ai_analysis.html');
+      } else {
+        window.location.href = 'ai_analysis.html';
+      }
+    }
+
+    // 生成二维码
+    function generateQRCode() {
+      const canvas = document.getElementById('qrCanvas');
+      if (!canvas) {
+        console.error('找不到二维码画布元素');
+        return;
+      }
+      
+      const size = 120;
+      canvas.width = size;
+      canvas.height = size;
+      
+      // 使用在线API生成二维码（也可以使用qrcode.js库）
+      const qrText = encodeURIComponent(window.location.href);
+      const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${qrText}`;
+      
+      const img = new Image();
+      // 设置超时，避免长时间等待
+      const timeout = setTimeout(() => {
+        drawPlaceholder(canvas, size);
+      }, 5000);
+      
+      img.onload = function() {
+        clearTimeout(timeout);
+        try {
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, size, size);
+        } catch (err) {
+          console.error('绘制二维码失败:', err);
+          drawPlaceholder(canvas, size);
+        }
+      };
+      
+      img.onerror = function() {
+        clearTimeout(timeout);
+        console.warn('二维码API加载失败，使用占位符');
+        drawPlaceholder(canvas, size);
+      };
+      
+      // 尝试加载，如果CORS失败则使用占位符
+      // 注意：某些浏览器可能阻止跨域图片，所以先尝试匿名模式
+      img.crossOrigin = 'anonymous';
+      // 如果CORS失败，立即使用占位符
+      setTimeout(() => {
+        if (!img.complete) {
+          clearTimeout(timeout);
+          drawPlaceholder(canvas, size);
+        }
+      }, 1000);
+      img.src = qrUrl;
+    }
+
+    // 绘制占位符
+    function drawPlaceholder(canvas, size) {
+      try {
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#2d5be3';
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 12px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('二维码', size/2, size/2);
+      } catch (err) {
+        console.error('绘制占位符失败:', err);
+      }
+    }
+
+    // 显示提示消息
+    let toastTimer = null;
+    function showToast(message) {
+      if (!message || typeof message !== 'string') {
+        console.warn('showToast: 无效的消息');
+        return;
+      }
+      
+      // 清除之前的toast
+      const existingToasts = document.querySelectorAll('.toast');
+      existingToasts.forEach(toast => {
+        try {
+          if (toast && toast.parentNode) {
+            toast.parentNode.removeChild(toast);
+          }
+        } catch (err) {
+          console.warn('清理toast失败:', err);
+        }
+      });
+      
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+      }
+      
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      
+      // 强制重排，确保动画生效
+      void toast.offsetHeight;
+      
+      setTimeout(() => {
+        if (toast.parentNode) {
+          toast.classList.add('show');
+        }
+      }, 10);
+      
+      toastTimer = setTimeout(() => {
+        if (toast && toast.parentNode) {
+          toast.classList.remove('show');
+          setTimeout(() => {
+            try {
+              if (toast && toast.parentNode) {
+                toast.parentNode.removeChild(toast);
+              }
+            } catch (err) {
+              console.warn('移除toast失败:', err);
+            }
+          }, 300);
+        }
+        toastTimer = null;
+      }, 2000);
+    }
+
+    // 页面加载时生成二维码
+    window.addEventListener('DOMContentLoaded', () => {
+      generateQRCode();
+    });
+  </script>
+</body>
+</html>
+

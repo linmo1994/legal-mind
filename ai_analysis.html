@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI分析 - LegalMind</title>
+  <link rel="stylesheet" href="ai_analysis.css">
+</head>
+<body>
+  <div class="container">
+    <h2>AI智能分析</h2>
+    <form class="analysis-form">
+      <div class="form-group">
+        <label for="caseSelect">选择案件</label>
+        <select id="caseSelect" required>
+          <option value="">请选择案件</option>
+          <option value="case1">案号2024-001 - 张三诉李四</option>
+          <option value="case2">案号2024-002 - 王五诉赵六</option>
+        </select>
+      </div>
+      <button type="button" id="analyzeBtn">AI分析</button>
+    </form>
+    <div class="progress-section" id="progressSection" style="display:none;">
+      <div class="progress-bar">
+        <div class="progress-inner" id="progressInner" style="width:0%"></div>
+      </div>
+      <span id="progressText">分析中...</span>
+    </div>
+    <div class="result-section" id="resultSection" style="display:none;">
+      <div class="result-card">
+        <h3>AI分析结果</h3>
+        <p id="resultText">（此处展示AI分析结果和建议）</p>
+      </div>
+    </div>
+  </div>
+  <script>
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const progressSection = document.getElementById('progressSection');
+    const progressInner = document.getElementById('progressInner');
+    const progressText = document.getElementById('progressText');
+    const resultSection = document.getElementById('resultSection');
+    const resultText = document.getElementById('resultText');
+    const caseSelect = document.getElementById('caseSelect');
+
+    analyzeBtn.onclick = function() {
+      if (!caseSelect.value) {
+        alert('请选择案件');
+        return;
+      }
+      progressSection.style.display = 'block';
+      resultSection.style.display = 'none';
+      progressInner.style.width = '0%';
+      progressText.textContent = '分析中...';
+      let progress = 0;
+      const timer = setInterval(() => {
+        progress += Math.random() * 20;
+        if (progress >= 100) {
+          progress = 100;
+          clearInterval(timer);
+          progressText.textContent = '分析完成';
+          setTimeout(() => {
+            progressSection.style.display = 'none';
+            resultSection.style.display = 'block';
+            resultText.textContent = 'AI建议：本案建议调解，双方可协商解决争议。';
+          }, 600);
+        }
+        progressInner.style.width = progress + '%';
+      }, 400);
+    };
+  </script>
+</body>
+</html> 

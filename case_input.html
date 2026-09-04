@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>案件录入 - LegalMind</title>
+  <link rel="stylesheet" href="case_input.css">
+</head>
+<body>
+  <div class="container">
+    <h2>案件录入</h2>
+    <form class="case-form">
+      <div class="form-group">
+        <label for="caseNo">案号</label>
+        <input type="text" id="caseNo" name="caseNo" placeholder="请输入案号" required>
+      </div>
+      <div class="form-group">
+        <label for="caseType">案由</label>
+        <input type="text" id="caseType" name="caseType" placeholder="请输入案由" required>
+      </div>
+      <div class="form-group">
+        <label for="parties">当事人</label>
+        <input type="text" id="parties" name="parties" placeholder="请输入当事人（用逗号分隔）" required>
+      </div>
+      <div class="form-group">
+        <label for="description">案情描述</label>
+        <textarea id="description" name="description" rows="5" placeholder="请详细描述案情" required></textarea>
+      </div>
+      <div class="form-actions">
+        <button type="submit">提交案件</button>
+        <button type="reset" class="secondary">重置</button>
+      </div>
+    </form>
+  </div>
+  <script>
+    document.querySelector('.case-form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      alert('案件信息已提交（原型演示）');
+    });
+  </script>
+</body>
+</html> 

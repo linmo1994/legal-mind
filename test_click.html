@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>点击测试</title>
+</head>
+<body>
+  <h1>点击测试</h1>
+  <button id="sendBtn">发送</button>
+  <div id="result"></div>
+  
+  <script>
+    // 测试DOM元素获取
+    console.log('测试开始');
+    const sendBtn = document.getElementById('sendBtn');
+    console.log('sendBtn元素:', sendBtn);
+    
+    if (sendBtn) {
+      sendBtn.onclick = function() {
+        console.log('按钮被点击了！');
+        document.getElementById('result').textContent = '按钮点击成功！';
+        sendBtn.textContent = '已点击';
+        sendBtn.disabled = true;
+      };
+      console.log('事件已绑定');
+    } else {
+      console.error('找不到sendBtn元素');
+    }
+  </script>
+</body>
+</html>
+

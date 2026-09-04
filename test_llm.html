@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM连接测试</title>
+</head>
+<body>
+  <h1>LLM连接测试</h1>
+  <button id="testBtn">测试LLM连接</button>
+  <div id="result" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc; white-space: pre-wrap;"></div>
+
+  <script>
+    async function testLLM() {
+      const resultDiv = document.getElementById('result');
+      resultDiv.textContent = '正在测试...\n';
+      
+      try {
+        // 加载配置
+        const configResponse = await fetch('config.json');
+        if (!configResponse.ok) {
+          throw new Error(`加载配置失败: HTTP ${configResponse.status}`);
+        }
+        const configData = await configResponse.json();
+        
+        resultDiv.textContent += `配置加载成功\n`;
+        resultDiv.textContent += `API URL: ${configData.llm.api_url}\n`;
+        resultDiv.textContent += `API Key: ${configData.llm.api_key.substring(0, 10)}...\n`;
+        resultDiv.textContent += `Model: ${configData.llm.model}\n\n`;
+        
+        // 测试LLM调用
+        resultDiv.textContent += '正在调用LLM API...\n';
+        
+        const response = await fetch(configData.llm.api_url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${configData.llm.api_key}`
+          },
+          body: JSON.stringify({
+            model: configData.llm.model,
+            messages: [
+              { role: 'user', content: '你好，请回复"测试成功"' }
+            ],
+            max_tokens: 50
+          })
+        });
+        
+        resultDiv.textContent += `HTTP状态: ${response.status} ${response.statusText}\n`;
+        
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(`API错误: ${JSON.stringify(errorData)}`);
+        }
+        
+        const data = await response.json();
+        resultDiv.textContent += `\n✅ 测试成功！\n`;
+        resultDiv.textContent += `响应: ${JSON.stringify(data, null, 2)}\n`;
+        resultDiv.textContent += `\nLLM回复: ${data.choices[0].message.content}\n`;
+        
+      } catch (error) {
+        resultDiv.textContent += `\n❌ 测试失败！\n`;
+        resultDiv.textContent += `错误: ${error.message}\n`;
+        resultDiv.textContent += `错误详情: ${error.stack || '无'}\n`;
+        
+        if (error.message.includes('CORS') || error.message.includes('Failed to fetch')) {
+          resultDiv.textContent += `\n⚠️ 这可能是CORS问题。DeepSeek API可能不允许直接从浏览器调用。\n`;
+          resultDiv.textContent += `建议：需要通过后端代理来调用LLM API。\n`;
+        }
+      }
+    }
+    
+    document.getElementById('testBtn').onclick = testLLM;
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+

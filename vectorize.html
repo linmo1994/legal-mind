@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>向量化文档 - LegalMind</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Arial', sans-serif;
+      background: #f5f6fa;
+      color: #222;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      padding: 30px;
+    }
+
+    h1 {
+      color: #2d5be3;
+      margin-bottom: 30px;
+      font-size: 2rem;
+    }
+
+    .section {
+      margin-bottom: 30px;
+      padding: 20px;
+      background: #f9fafb;
+      border-radius: 8px;
+    }
+
+    .section h2 {
+      color: #333;
+      margin-bottom: 15px;
+      font-size: 1.3rem;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      color: #555;
+      font-weight: 500;
+    }
+
+    input[type="text"],
+    textarea {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 14px;
+      font-family: inherit;
+    }
+
+    textarea {
+      min-height: 200px;
+      resize: vertical;
+    }
+
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: all 0.3s;
+      font-weight: 500;
+    }
+
+    .btn-primary {
+      background: #2d5be3;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #1e4bc7;
+    }
+
+    .btn-primary:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: #6c757d;
+      color: white;
+    }
+
+    .btn-secondary:hover {
+      background: #5a6268;
+    }
+
+    .status {
+      padding: 12px;
+      border-radius: 6px;
+      margin-top: 15px;
+    }
+
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+
+    .status.info {
+      background: #d1ecf1;
+      color: #0c5460;
+      border: 1px solid #bee5eb;
+    }
+
+    .result-area {
+      margin-top: 20px;
+      padding: 15px;
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      min-height: 200px;
+      max-height: 800px;
+      overflow-y: auto;
+    }
+
+    .search-results-list {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .results-summary {
+      padding: 12px 16px;
+      background: #e3f2fd;
+      border-left: 4px solid #2196f3;
+      border-radius: 6px;
+      color: #1976d2;
+      font-weight: 500;
+      font-size: 14px;
+      margin-bottom: 10px;
+    }
+
+    .document-group {
+      background: #ffffff;
+      border: 1px solid #e0e0e0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      overflow: hidden;
+      transition: box-shadow 0.2s;
+    }
+
+    .document-group:hover {
+      box-shadow: 0 4px 8px rgba(45,91,227,0.1);
+    }
+
+    .document-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .document-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 600;
+      flex: 1;
+    }
+
+    .document-chunks-count {
+      background: rgba(255,255,255,0.2);
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    .document-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      padding: 12px 20px;
+      background: #f8f9fa;
+      border-bottom: 1px solid #e0e0e0;
+      font-size: 13px;
+    }
+
+    .meta-item {
+      color: #666;
+    }
+
+    .meta-item strong {
+      color: #333;
+      font-weight: 600;
+    }
+
+    .chunks-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 20px;
+    }
+
+    .chunk-item {
+      background: #f8f9fa;
+      border: 1px solid #e0e0e0;
+      border-left: 3px solid #2d5be3;
+      border-radius: 6px;
+      padding: 14px;
+      transition: background 0.2s;
+    }
+
+    .chunk-item:hover {
+      background: #f0f4ff;
+    }
+
+    .chunk-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .chunk-number {
+      font-weight: 600;
+      color: #2d5be3;
+      font-size: 14px;
+    }
+
+    .similarity-badge {
+      background: #2d5be3;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .chunk-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 10px;
+      font-size: 12px;
+      color: #666;
+    }
+
+    .chunk-content {
+      margin-top: 10px;
+    }
+
+    .content-text {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 4px;
+      color: #333;
+      font-size: 14px;
+      line-height: 1.8;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      border: 1px solid #e0e0e0;
+    }
+
+    .loading {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #f3f3f3;
+      border-top: 2px solid #2d5be3;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .db-info {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-top: 15px;
+    }
+
+    .info-card {
+      padding: 15px;
+      background: white;
+      border-radius: 6px;
+      border: 1px solid #ddd;
+    }
+
+    .info-card h3 {
+      color: #2d5be3;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    .info-card .value {
+      font-size: 24px;
+      font-weight: bold;
+      color: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📚 向量化文档管理</h1>
+
+    <!-- 数据库信息 -->
+    <div class="section">
+      <h2>📊 向量数据库信息</h2>
+      <button class="btn btn-secondary" onclick="loadDbInfo()">刷新信息</button>
+      <div id="dbInfo" class="db-info"></div>
+    </div>
+
+    <!-- 向量化文档 -->
+    <div class="section">
+      <h2>📄 向量化文档</h2>
+      
+      <div class="form-group">
+        <label>文档ID（唯一标识）:</label>
+        <input type="text" id="documentId" placeholder="例如: doc_20241224_001">
+      </div>
+
+      <div class="form-group">
+        <label>文档标题（可选）:</label>
+        <input type="text" id="documentTitle" placeholder="例如: 劳动合同模板">
+      </div>
+
+      <div class="form-group">
+        <label>文档内容:</label>
+        <textarea id="documentText" placeholder="在此输入或粘贴文档内容..."></textarea>
+      </div>
+
+      <button class="btn btn-primary" onclick="vectorizeDocument()" id="vectorizeBtn">
+        开始向量化
+      </button>
+      <div id="vectorizeStatus"></div>
+    </div>
+
+    <!-- 搜索文档 -->
+    <div class="section">
+      <h2>🔍 搜索相似文档</h2>
+      
+      <div class="form-group">
+        <label>搜索查询:</label>
+        <input type="text" id="searchQuery" placeholder="输入要搜索的内容...">
+      </div>
+
+      <div class="form-group">
+        <label>返回结果数量:</label>
+        <input type="number" id="searchResultsCount" value="10" min="1" max="50" style="width: 100px;">
+      </div>
+
+      <button class="btn btn-primary" onclick="searchDocuments()" id="searchBtn">
+        搜索
+      </button>
+      <div id="searchStatus"></div>
+      <div id="searchResultsArea" class="result-area"></div>
+    </div>
+
+    <!-- 删除文档 -->
+    <div class="section">
+      <h2>🗑️ 删除文档</h2>
+      
+      <div class="form-group">
+        <label>文档ID:</label>
+        <input type="text" id="deleteDocumentId" placeholder="输入要删除的文档ID">
+      </div>
+
+      <button class="btn btn-secondary" onclick="deleteDocument()" id="deleteBtn">
+        删除文档
+      </button>
+      <div id="deleteStatus"></div>
+    </div>
+  </div>
+
+  <script>
+    let MCP_SERVER_URL = null;
+    let requestIdCounter = 0;
+
+    function normalizeMcpHost(host) {
+      // macOS 上 localhost 可能走 IPv6 (::1)，而服务端只监听 IPv4，会表现为 Failed to fetch
+      if (!host || host === 'localhost') {
+        return '127.0.0.1';
+      }
+      return host;
+    }
+
+    async function getMcpServerUrl() {
+      if (MCP_SERVER_URL) {
+        return MCP_SERVER_URL;
+      }
+      const response = await fetch('config.json?t=' + Date.now());
+      if (!response.ok) {
+        throw new Error(`加载配置失败: HTTP ${response.status}`);
+      }
+      const configData = await response.json();
+      const host = normalizeMcpHost((configData.mcp_server && configData.mcp_server.host) || 'localhost');
+      const port = (configData.mcp_server && configData.mcp_server.port) || 8001;
+      MCP_SERVER_URL = `http://${host}:${port}`;
+      console.log('[vectorize] MCP URL:', MCP_SERVER_URL);
+      return MCP_SERVER_URL;
+    }
+
+    // 生成请求ID
+    function generateRequestId() {
+      return ++requestIdCounter;
+    }
+
+    // 发送MCP请求
+    async function sendMCPRequest(method, params = {}) {
+      const request = {
+        jsonrpc: '2.0',
+        id: generateRequestId(),
+        method: method,
+        params: params
+      };
+
+      const url = await getMcpServerUrl();
+      let response;
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(request)
+        });
+      } catch (error) {
+        throw new Error(`无法连接 MCP 服务 ${url}（${error.message}）。请确认服务已启动且端口与 config.json 一致`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error.message || '请求失败');
+      }
+
+      return data.result;
+    }
+
+    // 调用工具
+    async function callTool(toolName, arguments_) {
+      const result = await sendMCPRequest('tools/call', {
+        name: toolName,
+        arguments: arguments_
+      });
+
+      // 解析工具返回的内容
+      if (result.content && result.content[0]) {
+        return JSON.parse(result.content[0].text);
+      }
+      return result;
+    }
+
+    // HTML转义函数，防止XSS攻击
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // 加载数据库信息
+    async function loadDbInfo() {
+      const dbInfoDiv = document.getElementById('dbInfo');
+      dbInfoDiv.innerHTML = '<div class="loading"></div> 加载中...';
+
+      try {
+        const info = await callTool('get_vector_db_info');
+        dbInfoDiv.innerHTML = `
+          <div class="info-card">
+            <h3>集合名称</h3>
+            <div class="value">${info.collection_name || 'N/A'}</div>
+          </div>
+          <div class="info-card">
+            <h3>文档数量</h3>
+            <div class="value">${info.document_count || 0}</div>
+          </div>
+          <div class="info-card">
+            <h3>存储路径</h3>
+            <div class="value" style="font-size: 12px;">${info.persist_directory || 'N/A'}</div>
+          </div>
+        `;
+      } catch (error) {
+        dbInfoDiv.innerHTML = `<div class="status error">错误: ${error.message}</div>`;
+      }
+    }
+
+    // 向量化文档
+    async function vectorizeDocument() {
+      const btn = document.getElementById('vectorizeBtn');
+      const statusDiv = document.getElementById('vectorizeStatus');
+      const documentId = document.getElementById('documentId').value.trim();
+      const documentTitle = document.getElementById('documentTitle').value.trim();
+      const documentText = document.getElementById('documentText').value.trim();
+
+      if (!documentId) {
+        statusDiv.innerHTML = '<div class="status error">请输入文档ID</div>';
+        return;
+      }
+
+      if (!documentText) {
+        statusDiv.innerHTML = '<div class="status error">请输入文档内容</div>';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span> 向量化中...';
+      statusDiv.innerHTML = '<div class="status info">正在向量化文档，请稍候...</div>';
+
+      try {
+        const metadata = {};
+        if (documentTitle) {
+          metadata.title = documentTitle;
+        }
+
+        const result = await callTool('vectorize_document', {
+          document_id: documentId,
+          text: documentText,
+          metadata: metadata
+        });
+
+        if (result.success) {
+          statusDiv.innerHTML = `<div class="status success">✅ ${result.message}</div>`;
+          // 清空输入
+          document.getElementById('documentText').value = '';
+          document.getElementById('documentId').value = '';
+          document.getElementById('documentTitle').value = '';
+          // 刷新数据库信息
+          loadDbInfo();
+        } else {
+          statusDiv.innerHTML = `<div class="status error">❌ ${result.error || '向量化失败'}</div>`;
+        }
+      } catch (error) {
+        statusDiv.innerHTML = `<div class="status error">❌ 错误: ${error.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '开始向量化';
+      }
+    }
+
+    // 搜索文档
+    async function searchDocuments() {
+      const btn = document.getElementById('searchBtn');
+      const statusDiv = document.getElementById('searchStatus');
+      const resultsDiv = document.getElementById('searchResultsArea');
+      const query = document.getElementById('searchQuery').value.trim();
+      const nResults = parseInt(document.getElementById('searchResultsCount').value) || 5;
+
+      if (!query) {
+        statusDiv.innerHTML = '<div class="status error">请输入搜索查询</div>';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span> 搜索中...';
+      statusDiv.innerHTML = '<div class="status info">正在搜索...</div>';
+      resultsDiv.innerHTML = '';
+
+      try {
+        const results = await callTool('search_documents', {
+          query: query,
+          n_results: nResults
+        });
+
+        if (results.length === 0) {
+          resultsDiv.innerHTML = '<div class="status info">未找到相似文档</div>';
+        } else {
+          // 按文档分组展示结果
+          const groupedByDocument = {};
+          
+          results.forEach((result, index) => {
+            const documentId = result.metadata?.document_id || 'unknown';
+            const documentTitle = result.metadata?.title || documentId;
+            
+            if (!groupedByDocument[documentId]) {
+              groupedByDocument[documentId] = {
+                title: documentTitle,
+                documentId: documentId,
+                chunks: []
+              };
+            }
+            
+            // ChromaDB可能返回不同类型的距离：
+            // 1. 余弦距离：范围0-2，distance = 1 - cosine_similarity
+            // 2. L2距离（欧氏距离）：范围0-无穷大，距离越小越相似
+            // 3. 内积距离：可能为负值
+            // 需要根据实际distance值来判断和转换
+            let similarity;
+            if (result.distance !== null && result.distance !== undefined) {
+              const distance = result.distance;
+              
+              // #region agent log
+              fetch('http://127.0.0.1:7242/ingest/0859865c-64b0-4653-a1d6-ebd1db64b092',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorize.html:621',message:'计算相似度',data:{distance,isNegative:distance<0,isGreaterThan2:distance>2},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+              // #endregion
+              
+              // ChromaDB默认使用L2距离（欧氏距离），向量已归一化
+              // 对于归一化向量的L2距离，范围是0-2
+              // L2_distance^2 = 2 - 2*cosine_similarity
+              // cosine_similarity = 1 - (L2_distance^2 / 2)
+              if (distance < 0) {
+                // 负值距离，可能是内积距离或其他度量
+                console.warn('检测到负值distance:', distance, '，使用备用计算方式');
+                similarity = '0.0%'; // 负值距离表示不相关，设为0%
+              } else if (distance <= 2) {
+                // 归一化向量的L2距离（ChromaDB默认），转换为余弦相似度
+                // 公式：cosine_similarity = 1 - (L2_distance^2 / 2)
+                const cosineSimilarity = 1 - (distance * distance / 2);
+                // 归一化到0-1范围：(cosine_similarity + 1) / 2
+                // cosine_similarity范围是-1到1，归一化后是0到1
+                const normalizedSimilarity = Math.max(0, (cosineSimilarity + 1) / 2);
+                similarity = (normalizedSimilarity * 100).toFixed(1) + '%';
+              } else {
+                // 向量未归一化，L2距离很大（>2），使用反比例函数
+                const maxDistance = 10; // 假设最大有效距离为10
+                const normalizedDistance = Math.min(distance / maxDistance, 1);
+                const normalizedSimilarity = 1 - normalizedDistance;
+                similarity = (Math.max(0, normalizedSimilarity) * 100).toFixed(1) + '%';
+              }
+              
+              // #region agent log
+              fetch('http://127.0.0.1:7242/ingest/0859865c-64b0-4653-a1d6-ebd1db64b092',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorize.html:640',message:'相似度计算结果',data:{distance,similarity},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+              // #endregion
+            } else {
+              similarity = 'N/A';
+            }
+            
+            groupedByDocument[documentId].chunks.push({
+              index: index + 1,
+              similarity: similarity,
+              chunkIndex: result.metadata?.chunk_index !== undefined ? result.metadata.chunk_index : 'N/A',
+              totalChunks: result.metadata?.total_chunks !== undefined ? result.metadata.total_chunks : 'N/A',
+              chunkId: result.id || 'N/A',
+              content: result.document,
+              distance: result.distance
+            });
+          });
+          
+          // 按相似度排序文档（取每个文档最高相似度的片段）
+          // 注意：similarity是字符串格式（如"85.5%"），需要解析为数字
+          const documentList = Object.values(groupedByDocument).map(doc => ({
+            ...doc,
+            maxSimilarity: Math.max(...doc.chunks.map(c => {
+              const simStr = c.similarity;
+              if (simStr === 'N/A') return 0;
+              // 去掉百分号并解析为数字
+              const simNum = parseFloat(simStr.replace('%', '')) || 0;
+              return simNum;
+            }))
+          })).sort((a, b) => b.maxSimilarity - a.maxSimilarity);
+          
+          // 生成HTML
+          let html = '<div class="search-results-list">';
+          html += `<div class="results-summary">找到 ${results.length} 个内容片段，来自 ${documentList.length} 个文档</div>`;
+          
+          documentList.forEach((doc, docIndex) => {
+            // 文档标题区域
+            html += `
+              <div class="document-group">
+                <div class="document-header">
+                  <h3 class="document-title">📄 ${escapeHtml(doc.title)}</h3>
+                  <span class="document-chunks-count">${doc.chunks.length} 个相关片段</span>
+                </div>
+                <div class="document-meta">
+                  <span class="meta-item">📋 文档ID: <strong>${escapeHtml(doc.documentId)}</strong></span>
+                </div>
+                
+                <div class="chunks-list">
+            `;
+            
+            // 按相似度排序该文档的片段
+            // 注意：similarity是字符串格式（如"85.5%"），需要解析为数字
+            doc.chunks.sort((a, b) => {
+              const simA = a.similarity === 'N/A' ? 0 : parseFloat(a.similarity.replace('%', '')) || 0;
+              const simB = b.similarity === 'N/A' ? 0 : parseFloat(b.similarity.replace('%', '')) || 0;
+              return simB - simA; // 降序排列（相似度高的在前）
+            });
+            
+            // 展示该文档的所有内容片段
+            doc.chunks.forEach((chunk, chunkIndex) => {
+              html += `
+                <div class="chunk-item">
+                  <div class="chunk-header">
+                    <span class="chunk-number">片段 ${chunkIndex + 1}</span>
+                    <span class="similarity-badge">相似度: ${chunk.similarity}</span>
+                  </div>
+                  <div class="chunk-meta">
+                    <span class="meta-item">📍 位置: 第 ${chunk.chunkIndex + 1}/${chunk.totalChunks} 块</span>
+                    <span class="meta-item">🆔 块ID: ${escapeHtml(chunk.chunkId)}</span>
+                  </div>
+                  <div class="chunk-content">
+                    <div class="content-text">${escapeHtml(chunk.content)}</div>
+                  </div>
+                </div>
+              `;
+            });
+            
+            html += `
+                </div>
+              </div>
+            `;
+          });
+          
+          html += '</div>';
+          resultsDiv.innerHTML = html;
+        }
+        statusDiv.innerHTML = `<div class="status success">✅ 找到 ${results.length} 个相似文档</div>`;
+      } catch (error) {
+        statusDiv.innerHTML = `<div class="status error">❌ 错误: ${error.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '搜索';
+      }
+    }
+
+    // 删除文档
+    async function deleteDocument() {
+      const btn = document.getElementById('deleteBtn');
+      const statusDiv = document.getElementById('deleteStatus');
+      const documentId = document.getElementById('deleteDocumentId').value.trim();
+
+      if (!documentId) {
+        statusDiv.innerHTML = '<div class="status error">请输入文档ID</div>';
+        return;
+      }
+
+      if (!confirm(`确定要删除文档 "${documentId}" 吗？`)) {
+        return;
+      }
+
+      btn.disabled = true;
+      btn.innerHTML = '<span class="loading"></span> 删除中...';
+      statusDiv.innerHTML = '<div class="status info">正在删除...</div>';
+
+      try {
+        const result = await callTool('delete_document', {
+          document_id: documentId
+        });
+
+        if (result.success) {
+          statusDiv.innerHTML = `<div class="status success">✅ ${result.message}</div>`;
+          document.getElementById('deleteDocumentId').value = '';
+          // 刷新数据库信息
+          loadDbInfo();
+        } else {
+          statusDiv.innerHTML = `<div class="status error">❌ ${result.message || '删除失败'}</div>`;
+        }
+      } catch (error) {
+        statusDiv.innerHTML = `<div class="status error">❌ 错误: ${error.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '删除文档';
+      }
+    }
+
+
+    // 页面加载时获取数据库信息
+    window.addEventListener('load', () => {
+      loadDbInfo();
+    });
+  </script>
+</body>
+</html>
+

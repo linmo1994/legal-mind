@@ -1,0 +1,32 @@
+⚠️ 重要提示：请通过HTTP服务器访问！
+
+由于浏览器安全限制，不能直接双击打开HTML文件。
+
+✅ 正确的启动方式：
+
+1. 启动MCP服务端（端口8000）：
+   python3 server/mcp_server.py
+
+2. 启动HTTP服务器（端口8888）：
+   python3 server/http_server.py 8888
+
+3. 在浏览器中访问：
+   http://localhost:8888/index.html
+
+或者使用启动脚本：
+   ./start_http_server.sh
+
+❌ 错误方式：
+   直接双击打开 index.html 或 mcp_client.html
+   （会报CORS错误，无法加载config.json）
+
+
+
+
+
+
+
+
+
+
+

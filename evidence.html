@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>证据管理 - LegalMind</title>
+  <link rel="stylesheet" href="evidence.css">
+</head>
+<body>
+  <div class="container">
+    <h2>证据管理</h2>
+    <div class="upload-section" id="uploadSection">
+      <input type="file" id="evidenceInput" multiple hidden>
+      <div class="upload-area" id="uploadArea">
+        <span>拖拽文件到此处，或 <button type="button" id="selectBtn">点击上传</button></span>
+      </div>
+    </div>
+    <ul class="evidence-list" id="evidenceList">
+      <!-- 证据项将动态插入 -->
+    </ul>
+  </div>
+  <script>
+    const input = document.getElementById('evidenceInput');
+    const area = document.getElementById('uploadArea');
+    const btn = document.getElementById('selectBtn');
+    const list = document.getElementById('evidenceList');
+    let files = [];
+
+    btn.onclick = () => input.click();
+    area.ondragover = e => { e.preventDefault(); area.classList.add('dragover'); };
+    area.ondragleave = e => { e.preventDefault(); area.classList.remove('dragover'); };
+    area.ondrop = e => {
+      e.preventDefault();
+      area.classList.remove('dragover');
+      handleFiles(e.dataTransfer.files);
+    };
+    input.onchange = () => handleFiles(input.files);
+
+    function handleFiles(selected) {
+      for (let file of selected) {
+        files.push(file);
+      }
+      renderList();
+    }
+    function renderList() {
+      list.innerHTML = '';
+      files.forEach((file, idx) => {
+        const li = document.createElement('li');
+        li.className = 'evidence-item';
+        li.innerHTML = `<span class="file-icon">📄</span><span class="file-name">${file.name}</span><button class="delete-btn" data-idx="${idx}">删除</button>`;
+        list.appendChild(li);
+      });
+      document.querySelectorAll('.delete-btn').forEach(btn => {
+        btn.onclick = e => {
+          files.splice(btn.dataset.idx, 1);
+          renderList();
+        };
+      });
+    }
+  </script>
+</body>
+</html> 

@@ -1,0 +1,28 @@
+✅ 正确的访问方式：
+
+1. 确保MCP服务端已启动（端口8000）
+2. 确保HTTP服务器已启动（端口8888）
+
+3. 在浏览器中访问以下地址：
+
+   http://localhost:8888/index.html
+
+   或
+
+   http://localhost:8888/mcp_client.html
+
+❌ 不要直接双击打开HTML文件！
+
+如果直接打开会报CORS错误：
+"Access to fetch at 'file:///.../config.json' has been blocked by CORS policy"
+
+
+
+
+
+
+
+
+
+
+

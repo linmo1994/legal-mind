@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>功能测试</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+    .success { color: green; }
+    .error { color: red; }
+    textarea { width: 100%; min-height: 100px; }
+    button { padding: 10px 20px; margin: 5px; }
+  </style>
+</head>
+<body>
+  <h1>客户端功能测试</h1>
+  
+  <div class="test-section">
+    <h2>1. 键盘回车发送功能测试</h2>
+    <p>在下面的输入框中测试：</p>
+    <ul>
+      <li><strong>Enter键</strong>：应该发送消息（如果输入框有内容）</li>
+      <li><strong>Shift+Enter</strong>：应该换行（不发送）</li>
+      <li><strong>Ctrl+Enter</strong> 或 <strong>Cmd+Enter</strong>：应该发送消息</li>
+    </ul>
+    <textarea id="testInput" placeholder="输入内容后按Enter键测试发送功能..."></textarea>
+    <button onclick="testSend()">手动发送</button>
+    <div id="keyboardResult"></div>
+  </div>
+  
+  <div class="test-section">
+    <h2>2. 文件上传功能测试</h2>
+    <p>点击下面的按钮测试文件上传：</p>
+    <button onclick="document.getElementById('testFileInput').click()">选择文件</button>
+    <input type="file" id="testFileInput" style="display: none;" multiple>
+    <div id="fileResult"></div>
+  </div>
+  
+  <script>
+    // 测试键盘回车发送
+    const testInput = document.getElementById('testInput');
+    const keyboardResult = document.getElementById('keyboardResult');
+    
+    testInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        keyboardResult.innerHTML = '<span class="success">✅ Enter键触发发送（非Shift+Enter）</span>';
+        testSend();
+      } else if (e.key === 'Enter' && e.shiftKey) {
+        // Shift+Enter 允许换行，不阻止默认行为
+        keyboardResult.innerHTML = '<span class="success">✅ Shift+Enter允许换行</span>';
+      } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        keyboardResult.innerHTML = '<span class="success">✅ Ctrl/Cmd+Enter触发发送</span>';
+        testSend();
+      }
+    };
+    
+    function testSend() {
+      const value = testInput.value.trim();
+      if (value) {
+        keyboardResult.innerHTML += `<br><span class="success">✅ 发送功能正常，内容: "${value}"</span>`;
+        testInput.value = '';
+      } else {
+        keyboardResult.innerHTML = '<span class="error">❌ 输入框为空，无法发送</span>';
+      }
+    }
+    
+    // 测试文件上传
+    const testFileInput = document.getElementById('testFileInput');
+    const fileResult = document.getElementById('fileResult');
+    
+    testFileInput.onchange = (e) => {
+      const files = Array.from(e.target.files);
+      if (files.length === 0) {
+        fileResult.innerHTML = '<span class="error">❌ 未选择文件</span>';
+        return;
+      }
+      
+      fileResult.innerHTML = `<span class="success">✅ 选择了 ${files.length} 个文件：</span><br>`;
+      
+      files.forEach((file, index) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          fileResult.innerHTML += `
+            <div style="margin: 10px 0; padding: 10px; background: #f0f0f0; border-radius: 3px;">
+              <strong>文件 ${index + 1}:</strong> ${file.name}<br>
+              <strong>大小:</strong> ${file.size} 字节<br>
+              <strong>类型:</strong> ${file.type || '未知'}<br>
+              <strong>内容预览:</strong> ${event.target.result.substring(0, 200)}${event.target.result.length > 200 ? '...' : ''}
+            </div>
+          `;
+        };
+        reader.onerror = () => {
+          fileResult.innerHTML += `<span class="error">❌ 读取文件失败: ${file.name}</span><br>`;
+        };
+        reader.readAsText(file);
+      });
+    };
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+

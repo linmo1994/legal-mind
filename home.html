@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LegalMind - 智能法律助手</title>
+  <link rel="stylesheet" href="home.css">
+</head>
+<body>
+  <div class="home-container">
+    <header class="home-header">
+      <div class="header-content">
+        <button id="historyTab" class="history-tab" title="查看历史记录" type="button">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/>
+            <path d="M12 6V12L16 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          <span class="history-tab-text">历史记录</span>
+        </button>
+        <div class="header-title-section">
+          <h1>⚖️ LegalMind</h1>
+          <p class="home-subtitle">智能法律助手，为您提供专业的法律咨询服务</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="home-main">
+      <div class="input-section">
+        <div class="input-wrapper">
+          <div class="input-container">
+            <!-- 文件预览区域 - 悬浮在输入框左上角 -->
+            <div id="homeFilePreviewContainer" class="file-preview-container" style="display: none;">
+              <div id="homeFilePreviewList" class="file-preview-list"></div>
+            </div>
+            <textarea 
+              id="homeUserInput" 
+              placeholder="请输入您的问题或需求，例如：帮我检索劳动合同法第64条..."
+              rows="4"
+            ></textarea>
+            <button id="homeFileUploadBtn" class="btn-icon-float btn-icon-left" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
+            <button id="homeSendBtn" class="btn-send-float" title="发送">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
+              </svg>
+            </button>
+            <input type="file" id="homeFileInput" style="display: none;" multiple>
+          </div>
+        </div>
+      </div>
+
+      <div class="examples-section">
+        <h3 class="examples-title">💡 LegalMind 擅长处理的问题示例</h3>
+        <div class="examples-grid">
+          <div class="example-card example-card-full-width" data-example="请你作为裁判者帮我断案">
+            <div class="example-icon">⚖️</div>
+            <div class="example-text">请你作为裁判者帮我断案</div>
+          </div>
+          <div class="example-card" data-example="请你以检察官视角，帮我梳理本案审查起诉阶段的罪名认定与量刑建议要点">
+            <div class="example-icon">📑</div>
+            <div class="example-text">检察官：罪名认定与量刑建议要点</div>
+          </div>
+          <div class="example-card" data-example="请你以公安办案民警视角，帮我列一份行政案件调查取证的程序要点清单">
+            <div class="example-icon">👮</div>
+            <div class="example-text">公安：调查取证程序要点清单</div>
+          </div>
+          <div class="example-card" data-example="帮我检索劳动合同法第64条">
+            <div class="example-icon">📋</div>
+            <div class="example-text">帮我检索劳动合同法第64条</div>
+          </div>
+          <div class="example-card" data-example="生成一份民间借贷纠纷起诉状">
+            <div class="example-icon">📝</div>
+            <div class="example-text">生成一份民间借贷纠纷起诉状</div>
+          </div>
+          <div class="example-card" data-example="查找与合同违约相关的相似案例">
+            <div class="example-icon">🔍</div>
+            <div class="example-text">查找与合同违约相关的相似案例</div>
+          </div>
+          <div class="example-card" data-example="帮我审查这份劳动合同">
+            <div class="example-icon">📄</div>
+            <div class="example-text">帮我审查这份劳动合同</div>
+          </div>
+        </div>
+      </div>
+    </main>
+    
+    <!-- MCP连接状态指示器 - 左下角 -->
+    <div id="mcpStatus" class="mcp-status mcp-status-bottom-left">
+      <span class="mcp-status-indicator"></span>
+      <span class="mcp-status-text">正在连接MCP服务...</span>
+    </div>
+  </div>
+
+  <script src="home.js?v=20260116"></script>
+  <script>
+    // 更新MCP状态显示
+    function updateMCPStatus(status, text) {
+      const statusEl = document.getElementById('mcpStatus');
+      const indicatorEl = statusEl.querySelector('.mcp-status-indicator');
+      const textEl = statusEl.querySelector('.mcp-status-text');
+      
+      indicatorEl.className = 'mcp-status-indicator';
+      if (status === 'connected') {
+        indicatorEl.classList.add('connected');
+      } else if (status === 'error') {
+        indicatorEl.classList.add('error');
+      }
+      textEl.textContent = text;
+    }
+
+    // 在首页加载时自动初始化MCP连接
+    (async function initMCPOnHomePage() {
+      try {
+        console.log('=== 首页MCP初始化开始 ===');
+        updateMCPStatus('connecting', '正在连接MCP服务...');
+        
+        // 加载配置
+        let configData;
+        try {
+          if (window.loadConfigCached) {
+            configData = await window.loadConfigCached();
+          } else {
+            const response = await fetch('config.json');
+            if (!response.ok) {
+              console.warn('⚠️ 配置加载失败，跳过MCP初始化');
+              updateMCPStatus('error', '配置加载失败');
+              return;
+            }
+            configData = await response.json();
+          }
+          console.log('✅ 配置加载成功');
+        } catch (error) {
+          console.warn('⚠️ 配置加载失败:', error.message);
+          updateMCPStatus('error', '配置加载失败');
+          return;
+        }
+        
+        const mcpServerUrl = `http://${configData.mcp_server.host}:${configData.mcp_server.port}`;
+        
+        // 测试MCP服务端连接
+        try {
+          updateMCPStatus('connecting', '正在测试MCP服务端连接...');
+          const healthResponse = await fetch(`${mcpServerUrl}/health`, {
+            method: 'GET',
+            signal: AbortSignal.timeout(5000) // 5秒超时
+          });
+          if (!healthResponse.ok) {
+            console.warn('⚠️ MCP服务端连接失败，跳过初始化');
+            updateMCPStatus('error', 'MCP服务端连接失败');
+            return;
+          }
+          console.log('✅ MCP服务端连接成功');
+          updateMCPStatus('connecting', 'MCP服务端连接成功，正在初始化...');
+        } catch (error) {
+          const msg = (error && error.message) ? String(error.message) : String(error);
+          const refused = /Failed to fetch|Load failed|NetworkError|CONNECTION_REFUSED/i.test(msg);
+          if (refused) {
+            console.debug('MCP 服务未启动或不可达（可先启动后再刷新）:', msg);
+          } else {
+            console.warn('⚠️ MCP服务端连接失败:', msg);
+          }
+          updateMCPStatus(
+            'error',
+            refused
+              ? 'MCP 未连接：请先在本机启动服务端（python3 server/mcp_server.py 或 ./start_server.sh），默认端口 ' + configData.mcp_server.port
+              : 'MCP服务端连接失败: ' + msg
+          );
+          return;
+        }
+        
+        // 发送MCP初始化请求
+        try {
+          const initResponse = await fetch(`${mcpServerUrl}/mcp`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'initialize',
+              params: {
+                protocolVersion: '2024-11-05',
+                capabilities: {},
+                clientInfo: {
+                  name: 'ai-judge-client',
+                  version: '1.0.0'
+                }
+              }
+            })
+          });
+          
+          if (!initResponse.ok) {
+            console.warn('⚠️ MCP初始化请求失败');
+            updateMCPStatus('error', 'MCP初始化请求失败');
+            return;
+          }
+          
+          const initData = await initResponse.json();
+          if (initData.error) {
+            console.warn('⚠️ MCP初始化错误:', initData.error.message);
+            updateMCPStatus('error', 'MCP初始化错误: ' + (initData.error.message || '未知错误'));
+            return;
+          }
+          
+          console.log('✅ MCP初始化成功');
+          console.log('服务端能力:', initData.result?.capabilities);
+          updateMCPStatus('connecting', 'MCP初始化成功，正在发现能力...');
+          
+          // 发送初始化通知
+          try {
+            await fetch(`${mcpServerUrl}/mcp`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                method: 'notifications/initialized'
+              })
+            });
+            console.log('✅ MCP初始化通知已发送');
+          } catch (error) {
+            console.warn('⚠️ 初始化通知发送失败:', error.message);
+          }
+          
+          // 能力发现统计
+          let resourcesCount = 0;
+          let toolsCount = 0;
+          let promptsCount = 0;
+          
+          // 获取资源列表（能力发现）
+          try {
+            updateMCPStatus('connecting', '正在发现资源...');
+            const resourcesResponse = await fetch(`${mcpServerUrl}/mcp`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 2,
+                method: 'resources/list'
+              }),
+              signal: AbortSignal.timeout(10000) // 10秒超时
+            });
+            
+            if (resourcesResponse.ok) {
+              const resourcesData = await resourcesResponse.json();
+              if (resourcesData.result) {
+                const resources = resourcesData.result.resources || [];
+                resourcesCount = resources.length;
+                console.log('✅ 已发现资源数量:', resourcesCount);
+                resources.forEach((r, i) => {
+                  console.log(`  资源${i+1}: ${r.uri} - ${r.name}`);
+                });
+              }
+            }
+          } catch (error) {
+            console.warn('⚠️ 获取资源列表失败:', error.message);
+          }
+          
+          // 获取工具列表（能力发现）
+          try {
+            updateMCPStatus('connecting', '正在发现工具...');
+            const toolsResponse = await fetch(`${mcpServerUrl}/mcp`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 3,
+                method: 'tools/list'
+              }),
+              signal: AbortSignal.timeout(10000) // 10秒超时
+            });
+            
+            if (toolsResponse.ok) {
+              const toolsData = await toolsResponse.json();
+              if (toolsData.result) {
+                const tools = toolsData.result.tools || [];
+                toolsCount = tools.length;
+                console.log('✅ 已发现工具数量:', toolsCount);
+                tools.forEach((t, i) => {
+                  console.log(`  工具${i+1}: ${t.name || 'unknown'}`);
+                });
+              }
+            }
+          } catch (error) {
+            console.warn('⚠️ 获取工具列表失败:', error.message);
+          }
+          
+          // 获取提示词模板列表（能力发现）
+          try {
+            updateMCPStatus('connecting', '正在发现提示词模板...');
+            const promptsResponse = await fetch(`${mcpServerUrl}/mcp`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 4,
+                method: 'prompts/list'
+              }),
+              signal: AbortSignal.timeout(10000) // 10秒超时
+            });
+            
+            if (promptsResponse.ok) {
+              const promptsData = await promptsResponse.json();
+              if (promptsData.result) {
+                const prompts = promptsData.result.prompts || [];
+                promptsCount = prompts.length;
+                console.log('✅ 已发现提示词模板数量:', promptsCount);
+                prompts.forEach((p, i) => {
+                  console.log(`  模板${i+1}: ${p.name} - ${p.description}`);
+                });
+              }
+            }
+          } catch (error) {
+            console.warn('⚠️ 获取提示词模板列表失败:', error.message);
+          }
+          
+          // 更新最终状态
+          const totalCapabilities = resourcesCount + toolsCount + promptsCount;
+          updateMCPStatus('connected', 'MCP已连接');
+          console.log('=== 首页MCP初始化完成 ===');
+          console.log(`能力发现总结: ${resourcesCount}个资源, ${toolsCount}个工具, ${promptsCount}个提示词模板`);
+          
+          // 保存MCP初始化状态到sessionStorage，供mcp_client.html使用
+          try {
+            sessionStorage.setItem('mcp_initialized', 'true');
+            sessionStorage.setItem('mcp_server_url', mcpServerUrl);
+            sessionStorage.setItem('mcp_resources_count', resourcesCount.toString());
+            sessionStorage.setItem('mcp_tools_count', toolsCount.toString());
+            sessionStorage.setItem('mcp_prompts_count', promptsCount.toString());
+            sessionStorage.setItem('mcp_init_timestamp', Date.now().toString());
+            console.log('✅ MCP状态已保存到sessionStorage，供其他页面使用');
+          } catch (error) {
+            console.warn('⚠️ 保存MCP状态到sessionStorage失败:', error.message);
+          }
+        } catch (error) {
+          console.warn('⚠️ MCP初始化过程出错:', error.message);
+          updateMCPStatus('error', 'MCP初始化失败: ' + error.message);
+        }
+      } catch (error) {
+        console.warn('⚠️ 首页MCP初始化失败:', error.message);
+        updateMCPStatus('error', 'MCP初始化失败: ' + error.message);
+      }
+    })().catch(function (err) {
+      console.warn('首页 MCP 初始化异常:', err);
+      try {
+        updateMCPStatus('error', 'MCP 初始化异常，请确认已启动 MCP 服务端');
+      } catch (e) { /* ignore */ }
+    });
+  </script>
+</body>
+</html>
+

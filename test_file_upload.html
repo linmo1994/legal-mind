@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>文件上传测试</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+    }
+    .test-section {
+      margin: 20px 0;
+      padding: 20px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 10px 5px;
+      cursor: pointer;
+    }
+    #log {
+      background: #f5f5f5;
+      padding: 10px;
+      border-radius: 5px;
+      max-height: 400px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .log-entry {
+      margin: 5px 0;
+      padding: 5px;
+      border-left: 3px solid #ccc;
+      padding-left: 10px;
+    }
+    .log-info { border-color: #2196F3; }
+    .log-success { border-color: #4CAF50; }
+    .log-error { border-color: #f44336; }
+    .log-warn { border-color: #FF9800; }
+  </style>
+</head>
+<body>
+  <h1>文件上传功能测试</h1>
+  
+  <div class="test-section">
+    <h2>测试1: 基本文件上传</h2>
+    <button onclick="testBasicUpload()">选择文件</button>
+    <input type="file" id="testFileInput" style="display: none;" onchange="handleFileSelect(event)">
+    <div id="fileResult"></div>
+  </div>
+  
+  <div class="test-section">
+    <h2>测试2: 检查元素是否存在</h2>
+    <button onclick="checkElements()">检查元素</button>
+    <div id="elementCheck"></div>
+  </div>
+  
+  <div class="test-section">
+    <h2>测试日志</h2>
+    <button onclick="clearLog()">清空日志</button>
+    <div id="log"></div>
+  </div>
+  
+  <script>
+    function log(message, type = 'info') {
+      const logDiv = document.getElementById('log');
+      const entry = document.createElement('div');
+      entry.className = `log-entry log-${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      logDiv.appendChild(entry);
+      logDiv.scrollTop = logDiv.scrollHeight;
+      console.log(message);
+    }
+    
+    function clearLog() {
+      document.getElementById('log').innerHTML = '';
+    }
+    
+    function testBasicUpload() {
+      log('点击了选择文件按钮', 'info');
+      document.getElementById('testFileInput').click();
+    }
+    
+    function handleFileSelect(e) {
+      const files = Array.from(e.target.files);
+      log(`选择了 ${files.length} 个文件`, 'info');
+      
+      files.forEach((file, index) => {
+        log(`文件 ${index + 1}: ${file.name} (${file.size} 字节, 类型: ${file.type})`, 'info');
+        
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const text = event.target.result;
+          log(`文件 ${file.name} 读取成功，内容长度: ${text.length} 字符`, 'success');
+          
+          const resultDiv = document.getElementById('fileResult');
+          resultDiv.innerHTML = `
+            <h3>文件内容预览:</h3>
+            <p><strong>文件名:</strong> ${file.name}</p>
+            <p><strong>大小:</strong> ${file.size} 字节</p>
+            <p><strong>内容长度:</strong> ${text.length} 字符</p>
+            <pre style="background: #f0f0f0; padding: 10px; border-radius: 5px; max-height: 300px; overflow-y: auto;">${text.substring(0, 1000)}${text.length > 1000 ? '...' : ''}</pre>
+          `;
+        };
+        reader.onerror = (error) => {
+          log(`文件 ${file.name} 读取失败: ${error}`, 'error');
+        };
+        reader.readAsText(file, 'UTF-8');
+      });
+    }
+    
+    function checkElements() {
+      log('开始检查元素...', 'info');
+      const checkDiv = document.getElementById('elementCheck');
+      const elements = {
+        'fileInput': document.getElementById('fileInput'),
+        'fileUploadBtn': document.getElementById('fileUploadBtn'),
+        'chatMessages': document.getElementById('chatMessages'),
+        'userInput': document.getElementById('userInput')
+      };
+      
+      let html = '<h3>元素检查结果:</h3><ul>';
+      for (const [name, element] of Object.entries(elements)) {
+        const exists = element !== null;
+        const status = exists ? '✅ 存在' : '❌ 不存在';
+        html += `<li><strong>${name}:</strong> ${status}</li>`;
+        log(`${name}: ${status}`, exists ? 'success' : 'error');
+      }
+      html += '</ul>';
+      checkDiv.innerHTML = html;
+    }
+    
+    // 页面加载时自动检查元素
+    window.addEventListener('load', () => {
+      log('页面加载完成', 'info');
+      checkElements();
+    });
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+

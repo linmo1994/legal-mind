@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>个人中心 - LegalMind</title>
+  <link rel="stylesheet" href="profile.css">
+</head>
+<body>
+  <div class="container">
+    <h2>个人中心</h2>
+    <div class="profile-card">
+      <div class="avatar">👤</div>
+      <div class="info">
+        <div class="info-row"><span class="label">用户名：</span><span id="username">法官小李</span></div>
+        <div class="info-row"><span class="label">手机号：</span><span id="phone">138****8888</span></div>
+        <div class="info-row"><span class="label">邮箱：</span><span id="email">judge.li@example.com</span></div>
+        <div class="info-row"><span class="label">微信号：</span><span id="wechat">judge_xiaoli</span></div>
+      </div>
+      <div class="actions">
+        <button id="editBtn">修改信息</button>
+        <button id="logoutBtn" class="secondary">退出登录</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    document.getElementById('editBtn').onclick = function() {
+      alert('修改信息功能为原型演示');
+    };
+    document.getElementById('logoutBtn').onclick = function() {
+      alert('已退出登录（原型演示）');
+    };
+  </script>
+</body>
+</html> 

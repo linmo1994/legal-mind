@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>连接测试工具</title>
+  <style>
+    body { font-family: 'Segoe UI', Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+    .container { max-width: 800px; margin: 0 auto; }
+    .test-section { background: white; padding: 20px; margin: 15px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .test-section h2 { margin-top: 0; color: #333; }
+    .test-item { padding: 10px; margin: 8px 0; border-left: 4px solid #ddd; background: #f9f9f9; }
+    .test-item.success { border-left-color: #4caf50; }
+    .test-item.error { border-left-color: #f44336; }
+    .test-item.loading { border-left-color: #ff9800; }
+    button { padding: 10px 20px; margin: 5px; background: #2d5be3; color: white; border: none; border-radius: 5px; cursor: pointer; }
+    button:hover { background: #1e4bc7; }
+    pre { background: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+    .summary { background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔍 客户端与服务端连接测试工具</h1>
+    
+    <div class="summary">
+      <h3>快速测试</h3>
+      <button onclick="runAllTests()">运行所有测试</button>
+      <button onclick="testHTTPServer()">测试HTTP服务器</button>
+      <button onclick="testMCPServer()">测试MCP服务端</button>
+      <button onclick="testLLMProxy()">测试LLM代理</button>
+      <div id="summaryResult"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>1. HTTP服务器测试（端口8888）</h2>
+      <div id="httpTest"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>2. MCP服务端测试（端口8000）</h2>
+      <div id="mcpTest"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>3. MCP协议测试</h2>
+      <div id="mcpProtocolTest"></div>
+    </div>
+
+    <div class="test-section">
+      <h2>4. LLM API代理测试</h2>
+      <div id="llmTest"></div>
+    </div>
+  </div>
+
+  <script>
+    function addTestResult(containerId, title, status, content) {
+      const container = document.getElementById(containerId);
+      const div = document.createElement('div');
+      div.className = `test-item ${status}`;
+      div.innerHTML = `
+        <strong>${status === 'success' ? '✅' : status === 'error' ? '❌' : '⏳'} ${title}</strong>
+        <pre>${content}</pre>
+      `;
+      container.appendChild(div);
+    }
+
+    function clearTest(containerId) {
+      document.getElementById(containerId).innerHTML = '';
+    }
+
+    async function testHTTPServer() {
+      clearTest('httpTest');
+      addTestResult('httpTest', '测试HTTP服务器', 'loading', '测试中...');
+      
+      try {
+        const response = await fetch('http://localhost:8888/config.json');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const data = await response.json();
+        addTestResult('httpTest', 'HTTP服务器', 'success', 
+          `✅ 服务器正常\n` +
+          `配置加载成功\n` +
+          `MCP服务端: ${data.mcp_server.host}:${data.mcp_server.port}\n` +
+          `LLM模型: ${data.llm.model}\n` +
+          `API Key: ${data.llm.api_key.substring(0, 10)}...`
+        );
+        return true;
+      } catch (e) {
+        addTestResult('httpTest', 'HTTP服务器', 'error', 
+          `❌ 连接失败\n` +
+          `错误: ${e.message}\n\n` +
+          `请启动HTTP服务器:\n` +
+          `python server/http_server.py 8888`
+        );
+        return false;
+      }
+    }
+
+    async function testMCPServer() {
+      clearTest('mcpTest');
+      addTestResult('mcpTest', '测试MCP服务端', 'loading', '测试中...');
+      
+      try {
+        const response = await fetch('http://localhost:8000/health');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        
+        const data = await response.json();
+        addTestResult('mcpTest', 'MCP服务端健康检查', 'success', 
+          `✅ 服务端正常运行\n` +
+          `响应: ${JSON.stringify(data, null, 2)}`
+        );
+        return true;
+      } catch (e) {
+        addTestResult('mcpTest', 'MCP服务端', 'error', 
+          `❌ 连接失败\n` +
+          `错误: ${e.message}\n\n` +
+          `请启动MCP服务端:\n` +
+          `python server/mcp_server.py`
+        );
+        return false;
+      }
+    }
+
+    async function testMCPProtocol() {
+      clearTest('mcpProtocolTest');
+      addTestResult('mcpProtocolTest', '测试MCP协议', 'loading', '测试中...');
+      
+      try {
+        // 测试初始化
+        const initResponse = await fetch('http://localhost:8000', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'initialize',
+            params: {
+              protocolVersion: '2024-11-05',
+              capabilities: {},
+              clientInfo: { name: 'test', version: '1.0' }
+            }
+          })
+        });
+        
+        if (!initResponse.ok) throw new Error(`HTTP ${initResponse.status}`);
+        const initData = await initResponse.json();
+        
+        if (initData.error) {
+          throw new Error(initData.error.message);
+        }
+        
+        addTestResult('mcpProtocolTest', 'MCP初始化', 'success', 
+          `✅ 初始化成功\n` +
+          `协议版本: ${initData.result.protocolVersion}\n` +
+          `能力: ${JSON.stringify(initData.result.capabilities, null, 2)}`
+        );
+        
+        // 测试资源列表
+        const resourcesResponse = await fetch('http://localhost:8000', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 2,
+            method: 'resources/list'
+          })
+        });
+        
+        const resourcesData = await resourcesResponse.json();
+        if (resourcesData.result && resourcesData.result.resources) {
+          const count = resourcesData.result.resources.length;
+          addTestResult('mcpProtocolTest', '资源列表', 'success', 
+            `✅ 获取资源列表成功\n` +
+            `资源数量: ${count}\n` +
+            resourcesData.result.resources.map(r => `  - ${r.uri}: ${r.name}`).join('\n')
+          );
+        }
+        
+        return true;
+      } catch (e) {
+        addTestResult('mcpProtocolTest', 'MCP协议', 'error', 
+          `❌ 测试失败\n` +
+          `错误: ${e.message}`
+        );
+        return false;
+      }
+    }
+
+    async function testLLMProxy() {
+      clearTest('llmTest');
+      addTestResult('llmTest', '测试LLM代理', 'loading', '测试中...');
+      
+      try {
+        const response = await fetch('http://localhost:8000/api/llm/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'deepseek-chat',
+            messages: [{ role: 'user', content: '测试连接，请回复"连接成功"' }],
+            max_tokens: 10
+          })
+        });
+        
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(`HTTP ${response.status}: ${JSON.stringify(error)}`);
+        }
+        
+        const data = await response.json();
+        if (data.choices && data.choices[0]) {
+          const content = data.choices[0].message.content;
+          addTestResult('llmTest', 'LLM API代理', 'success', 
+            `✅ 连接成功\n` +
+            `LLM响应: ${content}\n\n` +
+            `完整响应:\n${JSON.stringify(data, null, 2).substring(0, 500)}...`
+          );
+          return true;
+        } else {
+          throw new Error('响应格式错误');
+        }
+      } catch (e) {
+        addTestResult('llmTest', 'LLM代理', 'error', 
+          `❌ 测试失败\n` +
+          `错误: ${e.message}\n\n` +
+          `请检查:\n` +
+          `1. MCP服务端是否运行\n` +
+          `2. config.json中的API Key是否正确\n` +
+          `3. 网络连接是否正常`
+        );
+        return false;
+      }
+    }
+
+    async function runAllTests() {
+      document.getElementById('summaryResult').innerHTML = '<p>正在运行测试...</p>';
+      
+      const results = [];
+      
+      results.push(await testHTTPServer());
+      await new Promise(r => setTimeout(r, 500));
+      
+      results.push(await testMCPServer());
+      await new Promise(r => setTimeout(r, 500));
+      
+      if (results[1]) {  // 如果MCP服务端连接成功
+        results.push(await testMCPProtocol());
+        await new Promise(r => setTimeout(r, 500));
+        results.push(await testLLMProxy());
+      } else {
+        clearTest('mcpProtocolTest');
+        clearTest('llmTest');
+        addTestResult('mcpProtocolTest', 'MCP协议', 'error', '跳过测试（MCP服务端未运行）');
+        addTestResult('llmTest', 'LLM代理', 'error', '跳过测试（MCP服务端未运行）');
+      }
+      
+      const passed = results.filter(r => r).length;
+      const total = results.length;
+      
+      document.getElementById('summaryResult').innerHTML = `
+        <h4>测试完成: ${passed}/${total} 通过</h4>
+        ${passed === total ? '<p style="color: green;">✅ 所有测试通过！系统连接正常。</p>' : '<p style="color: red;">⚠️ 有测试失败，请检查相关服务。</p>'}
+      `;
+    }
+
+    // 页面加载时自动运行测试
+    window.addEventListener('load', () => {
+      console.log('自动运行连接测试...');
+      runAllTests();
+    });
+  </script>
+</body>
+</html>

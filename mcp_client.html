@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LegalMind（MCP）</title>
+  <link rel="stylesheet" href="mcp_client.css">
+  <script>
+    // 检测file://协议并提示
+    if (window.location.protocol === 'file:') {
+      document.addEventListener('DOMContentLoaded', function() {
+        const errorDiv = document.createElement('div');
+        errorDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f44336;color:#fff;padding:20px;text-align:center;z-index:10000;font-size:16px;line-height:1.6;';
+        errorDiv.innerHTML = `
+          <strong>⚠️ 检测到使用file://协议打开页面</strong><br>
+          这会导致无法加载配置文件。请使用HTTP服务器访问：<br>
+          <strong>1. 运行命令: python server/http_server.py 8888</strong><br>
+          <strong>2. 在浏览器访问: <a href="http://localhost:8888/index.html" style="color:#fff;text-decoration:underline;">http://localhost:8888/index.html</a></strong>
+        `;
+        document.body.insertBefore(errorDiv, document.body.firstChild);
+      });
+    }
+  </script>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <button type="button" id="homeBackTab" class="header-home-tab" title="返回首页" aria-label="返回首页">
+        <!-- Lucide 风格「返回」：圆角端点 + 水平线 + 左侧尖角，与常见 App 导航一致 -->
+        <svg class="header-home-tab-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <g stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5"/>
+            <path d="m12 19-7-7 7-7"/>
+          </g>
+        </svg>
+      </button>
+      <h1 class="header-title">⚖️ LegalMind 智能体</h1>
+    </header>
+
+    <div class="main-content">
+      <!-- 会话列表侧边栏 -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h3>会话列表</h3>
+          <div class="sidebar-actions">
+            <button id="newSessionBtn" class="btn-sidebar" title="新建会话">+</button>
+            <button id="clearHistoryBtn" class="btn-sidebar" title="清空历史">🗑️</button>
+          </div>
+        </div>
+        <div id="sessionList" class="session-list"></div>
+      </aside>
+
+      <!-- 对话区域 -->
+      <div class="chat-area">
+        <div id="chatMessages" class="chat-messages"></div>
+        
+        <!-- 参数选择弹窗 -->
+        <div id="parameterModal" class="modal" style="display: none;">
+          <div class="modal-content">
+            <h3>请选择参数值</h3>
+            <div id="parameterOptions" class="parameter-options"></div>
+            <div class="modal-actions">
+              <button id="confirmParameterBtn" class="btn-primary">确认</button>
+              <button id="cancelParameterBtn" class="btn-secondary">取消</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 工具调用批准弹窗 -->
+        <div id="toolApprovalModal" class="modal" style="display: none;">
+          <div class="modal-content">
+            <h3>工具调用请求</h3>
+            <div id="toolApprovalInfo" class="tool-info"></div>
+            <div class="modal-actions">
+              <button id="approveToolBtn" class="btn-primary">批准</button>
+              <button id="rejectToolBtn" class="btn-secondary">拒绝</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 删除确认弹窗 -->
+        <div id="deleteConfirmModal" class="modal" style="display: none;">
+          <div class="modal-content delete-modal-content">
+            <h3 class="delete-modal-title">删除确认</h3>
+            <p id="deleteConfirmMessage" class="delete-modal-message">确定删除该对话吗?删除后将无法查看</p>
+            <div class="modal-actions">
+              <button id="cancelDeleteBtn" class="btn-secondary">取消</button>
+              <button id="confirmDeleteBtn" class="btn-danger">删除</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 文件预览区域（悬浮在输入框上方） -->
+        <div id="filePreviewArea" class="file-preview-area" style="display: none;">
+          <div class="file-preview-header">
+            <span class="file-preview-title">已上传文件</span>
+            <button id="clearFilesBtn" class="btn-clear-files" title="清除所有文件">✕</button>
+          </div>
+          <div id="filePreviewList" class="file-preview-list"></div>
+        </div>
+
+        <!-- 输入区域 -->
+        <div class="input-area">
+          <div class="input-wrapper">
+            <!-- 文件预览容器 - 在输入框内部左上角（与首页相同效果） -->
+            <div id="filePreviewContainer" class="file-preview-container" style="display: none;">
+              <div id="filePreviewListInline" class="file-preview-list-inline"></div>
+            </div>
+            <textarea 
+              id="userInput" 
+              placeholder="请输入您的问题或需求..." 
+              rows="3"
+            ></textarea>
+            <button id="fileUploadBtn" class="btn-icon btn-icon-float" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
+            <button id="sendBtn" class="btn-primary btn-send-float" onclick="handleUserInput(); return false;" title="发送">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
+              </svg>
+            </button>
+            <input type="file" id="fileInput" style="display: none;" multiple>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态栏 -->
+    <div class="status-bar">
+      <span id="connectionStatus" class="status-indicator">●</span>
+      <span id="statusText">就绪</span>
+    </div>
+  </div>
+
+  <script src="mcp_client.js?v=20260115"></script>
+</body>
+</html>
+

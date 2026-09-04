@@ -1,0 +1,18 @@
+.DS_Store
+.cursor/
+
+# Local secrets and runtime data
+config.json
+*.db
+*.pid
+*.log
+*.log.*
+
+chroma_db/
+chroma_db.backup*/
+
+uploads/
+__pycache__/
+*.pyc
+.venv/
+venv/

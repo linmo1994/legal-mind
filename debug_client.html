@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>调试 - MCP客户端</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    button { padding: 10px 20px; margin: 10px; font-size: 16px; }
+    #log { background: #f0f0f0; padding: 10px; margin-top: 20px; height: 400px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h1>MCP客户端调试工具</h1>
+  <button onclick="testElements()">测试DOM元素</button>
+  <button onclick="testEvents()">测试事件绑定</button>
+  <button onclick="testClick()">模拟点击发送</button>
+  <div id="log"></div>
+
+  <script>
+    function log(msg) {
+      const logDiv = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      logDiv.innerHTML += `[${time}] ${msg}<br>`;
+      logDiv.scrollTop = logDiv.scrollHeight;
+      console.log(msg);
+    }
+
+    function testElements() {
+      log('=== 测试DOM元素 ===');
+      const sendBtn = document.getElementById('sendBtn');
+      const userInput = document.getElementById('userInput');
+      const chatMessages = document.getElementById('chatMessages');
+      
+      log(`sendBtn: ${sendBtn ? '找到' : '未找到'}`);
+      log(`userInput: ${userInput ? '找到' : '未找到'}`);
+      log(`chatMessages: ${chatMessages ? '找到' : '未找到'}`);
+      
+      if (sendBtn) {
+        log(`sendBtn.disabled: ${sendBtn.disabled}`);
+        log(`sendBtn.textContent: ${sendBtn.textContent}`);
+        log(`sendBtn.onclick: ${typeof sendBtn.onclick}`);
+      }
+    }
+
+    function testEvents() {
+      log('=== 测试事件绑定 ===');
+      const sendBtn = document.getElementById('sendBtn');
+      if (sendBtn) {
+        log('添加测试事件监听器...');
+        sendBtn.addEventListener('click', function(e) {
+          log('✅ 点击事件触发！');
+          e.preventDefault();
+        });
+        log('测试事件已添加');
+      } else {
+        log('❌ sendBtn不存在');
+      }
+    }
+
+    function testClick() {
+      log('=== 模拟点击发送 ===');
+      const sendBtn = document.getElementById('sendBtn');
+      if (sendBtn) {
+        log('触发点击事件...');
+        sendBtn.click();
+        log('点击事件已触发');
+      } else {
+        log('❌ sendBtn不存在');
+      }
+    }
+
+    // 监听所有按钮点击
+    document.addEventListener('click', function(e) {
+      if (e.target.tagName === 'BUTTON') {
+        log(`按钮被点击: ${e.target.id || e.target.textContent}`);
+      }
+    });
+
+    log('调试工具已加载');
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+
