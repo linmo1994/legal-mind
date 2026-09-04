@@ -416,3 +416,219 @@ class RbacStore:
         ).fetchone()
         conn.close()
         return dict(row) if row else None
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT id, username, display_name, is_active, must_change_password, created_at
+            FROM users ORDER BY id
+            """
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def set_user_active(self, user_id: int, is_active: bool) -> None:
+        conn = self._connect()
+        conn.execute(
+            "UPDATE users SET is_active = ? WHERE id = ?",
+            (1 if is_active else 0, user_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def update_permission_meta(
+        self,
+        code: str,
+        name: Optional[str] = None,
+        group_name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        conn = self._connect()
+        row = conn.execute("SELECT * FROM permissions WHERE code = ?", (code,)).fetchone()
+        if not row:
+            conn.close()
+            return None
+        new_name = name if name is not None else row["name"]
+        new_group = group_name if group_name is not None else row["group_name"]
+        new_desc = description if description is not None else row["description"]
+        conn.execute(
+            "UPDATE permissions SET name = ?, group_name = ?, description = ? WHERE code = ?",
+            (new_name, new_group, new_desc, code),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT id, code, name, kind, group_name, description FROM permissions WHERE code = ?",
+            (code,),
+        ).fetchone()
+        conn.close()
+        return dict(updated) if updated else None
+
+    def list_role_permission_codes(self, role_code: str) -> List[str]:
+        return sorted(self.permissions_for_role_codes([role_code]))
+
+    def create_case(
+        self,
+        case_no: str,
+        title: str,
+        created_by: Optional[int] = None,
+        status: str = "open",
+        meta_json: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        now = datetime.now().isoformat()
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO cases (case_no, title, status, created_by, created_at, updated_at, meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (case_no, title, status, created_by, now, now, meta_json),
+        )
+        conn.commit()
+        case_id = cur.lastrowid
+        row = conn.execute("SELECT * FROM cases WHERE id = ?", (case_id,)).fetchone()
+        conn.close()
+        return dict(row)
+
+    def get_case(self, case_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._connect()
+        row = conn.execute("SELECT * FROM cases WHERE id = ?", (case_id,)).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def list_cases(self) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute("SELECT * FROM cases ORDER BY id DESC").fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def list_cases_for_user(self, user_id: int, all_cases: bool = False) -> List[Dict[str, Any]]:
+        if all_cases:
+            return self.list_cases()
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT c.* FROM cases c
+            JOIN case_members m ON m.case_id = c.id
+            WHERE m.user_id = ?
+            ORDER BY c.id DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def update_case(
+        self,
+        case_id: int,
+        title: Optional[str] = None,
+        status: Optional[str] = None,
+        case_no: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        case = self.get_case(case_id)
+        if not case:
+            return None
+        now = datetime.now().isoformat()
+        conn = self._connect()
+        conn.execute(
+            """
+            UPDATE cases SET title = ?, status = ?, case_no = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                title if title is not None else case["title"],
+                status if status is not None else case["status"],
+                case_no if case_no is not None else case["case_no"],
+                now,
+                case_id,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return self.get_case(case_id)
+
+    def add_case_member(
+        self,
+        case_id: int,
+        user_id: int,
+        role_code: str,
+        assigned_by: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("user not found")
+        firm_roles = set(self.list_user_role_codes(user_id))
+        if firm_roles & FIRM_TRACK_ROLES:
+            raise ValueError("director/admin_officer cannot be case members")
+        if role_code not in CASE_TRACK_ROLES:
+            raise ValueError("case member role must be partner, lead_lawyer, or assistant")
+        role = self.get_role_by_code(role_code)
+        if not role:
+            raise ValueError(f"unknown role: {role_code}")
+        if not self.get_case(case_id):
+            raise ValueError("case not found")
+        now = datetime.now().isoformat()
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT INTO case_members (user_id, case_id, role_id, assigned_by, assigned_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, case_id) DO UPDATE SET
+              role_id = excluded.role_id,
+              assigned_by = excluded.assigned_by,
+              assigned_at = excluded.assigned_at
+            """,
+            (user_id, case_id, role["id"], assigned_by, now),
+        )
+        conn.commit()
+        conn.close()
+        return self.get_case_member(case_id, user_id)  # type: ignore
+
+    def remove_case_member(self, case_id: int, user_id: int) -> None:
+        conn = self._connect()
+        conn.execute(
+            "DELETE FROM case_members WHERE case_id = ? AND user_id = ?",
+            (case_id, user_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_case_member(self, case_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT m.user_id, m.case_id, m.assigned_by, m.assigned_at,
+                   r.code AS role_code, r.name AS role_name,
+                   u.username, u.display_name
+            FROM case_members m
+            JOIN roles r ON r.id = m.role_id
+            JOIN users u ON u.id = m.user_id
+            WHERE m.case_id = ? AND m.user_id = ?
+            """,
+            (case_id, user_id),
+        ).fetchone()
+        conn.close()
+        return dict(row) if row else None
+
+    def list_case_members(self, case_id: int) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT m.user_id, m.case_id, m.assigned_by, m.assigned_at,
+                   r.code AS role_code, r.name AS role_name,
+                   u.username, u.display_name
+            FROM case_members m
+            JOIN roles r ON r.id = m.role_id
+            JOIN users u ON u.id = m.user_id
+            WHERE m.case_id = ?
+            ORDER BY m.assigned_at
+            """,
+            (case_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
+    def case_role_code(self, user_id: int, case_id: int) -> Optional[str]:
+        member = self.get_case_member(case_id, user_id)
+        return member["role_code"] if member else None
