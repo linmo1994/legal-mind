@@ -10,6 +10,41 @@ from kb_ingest import ingest_uploaded_file
 from kb_store import DOC_TYPES, KbStore
 from rbac_service import RbacService
 
+# Action: (name, doc_id|None). name in list|create|search|get|patch|delete|update|None
+KbRoute = Tuple[Optional[str], Optional[str]]
+
+
+def parse_kb_path(path: str, method: str) -> KbRoute:
+    """Parse /api/admin/kb routes. Path should already be stripped of query string.
+
+    /api/admin/kb/documents/{id} splits to 6 parts (index 5 = id).
+    /api/admin/kb/documents/{id}/update splits to 7 parts (parts[6] == "update").
+    """
+    path = (path or "").split("?", 1)[0].rstrip("/") or "/"
+    method = (method or "").upper()
+
+    if path == "/api/admin/kb/documents" and method == "GET":
+        return ("list", None)
+    if path == "/api/admin/kb/documents" and method == "POST":
+        return ("create", None)
+    if path == "/api/admin/kb/search" and method == "POST":
+        return ("search", None)
+
+    if not path.startswith("/api/admin/kb/documents/"):
+        return (None, None)
+
+    parts = path.split("/")
+    # "", "api", "admin", "kb", "documents", "{id}" [, "update"]
+    if len(parts) == 7 and parts[6] == "update" and method == "POST":
+        return ("update", parts[5])
+    if len(parts) == 6 and method == "GET":
+        return ("get", parts[5])
+    if len(parts) == 6 and method == "PATCH":
+        return ("patch", parts[5])
+    if len(parts) == 6 and method == "DELETE":
+        return ("delete", parts[5])
+    return (None, None)
+
 
 class KbHttpApi:
     def __init__(
@@ -191,13 +226,14 @@ class KbHttpApi:
         if not existing:
             return _deny(404, "文档不存在")
 
-        ok = self.store.soft_delete(doc_id)
-        if not ok:
-            return _deny(404, "文档不存在")
+        # Chroma first, then soft-delete — avoids soft-deleted rows left when Chroma fails.
         try:
             self.vector_service.delete_document(doc_id)
         except Exception as e:
             return _deny(500, f"向量删除失败: {e}")
+        ok = self.store.soft_delete(doc_id)
+        if not ok:
+            return _deny(404, "文档不存在")
         return _ok({"ok": True, "id": doc_id})
 
     def search(self, authorization: Optional[str], body: dict) -> StatusPayload:

@@ -3558,6 +3558,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             return
         try:
             from urllib.parse import urlparse, parse_qs
+            from http_kb_api import parse_kb_path
             self._sync_kb_vector_service(api)
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/") or "/"
@@ -3567,7 +3568,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             if method in ("POST", "PATCH", "PUT"):
                 body = self._read_json_body() or {}
 
-            if path == "/api/admin/kb/documents" and method == "GET":
+            action, doc_id = parse_kb_path(path, method)
+            if action == "list":
                 doc_type = qs.get("doc_type", [""])[0]
                 limit = qs.get("limit", ["50"])[0]
                 offset = qs.get("offset", ["0"])[0]
@@ -3575,31 +3577,21 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     *api.list_documents(authz, doc_type, limit=limit, offset=offset)
                 )
                 return
-            if path == "/api/admin/kb/documents" and method == "POST":
+            if action == "create":
                 self._write_json(*api.create_from_file(authz, body))
                 return
-            if path == "/api/admin/kb/search" and method == "POST":
+            if action == "search":
                 self._write_json(*api.search(authz, body))
                 return
-            if path.startswith("/api/admin/kb/documents/"):
-                parts = path.split("/")
-                # /api/admin/kb/documents/{id} or .../{id}/update
-                if len(parts) < 5:
-                    self._write_json(404, {"error": "未找到接口"})
-                    return
-                doc_id = parts[4]
-                if len(parts) == 6 and parts[5] == "update" and method == "POST":
-                    self._write_json(*api.patch_document(authz, doc_id, body))
-                    return
-                if len(parts) == 5 and method == "GET":
-                    self._write_json(*api.get_document(authz, doc_id))
-                    return
-                if len(parts) == 5 and method == "PATCH":
-                    self._write_json(*api.patch_document(authz, doc_id, body))
-                    return
-                if len(parts) == 5 and method == "DELETE":
-                    self._write_json(*api.delete_document(authz, doc_id))
-                    return
+            if action == "get" and doc_id:
+                self._write_json(*api.get_document(authz, doc_id))
+                return
+            if action in ("patch", "update") and doc_id:
+                self._write_json(*api.patch_document(authz, doc_id, body))
+                return
+            if action == "delete" and doc_id:
+                self._write_json(*api.delete_document(authz, doc_id))
+                return
 
             self._write_json(404, {"error": "未找到接口"})
         except Exception as e:

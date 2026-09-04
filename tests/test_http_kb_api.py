@@ -3,13 +3,37 @@ from auth_service import AuthService
 from rbac_service import RbacService
 from rbac_store import RbacStore
 from kb_store import KbStore
-from http_kb_api import KbHttpApi
+from http_kb_api import KbHttpApi, parse_kb_path
 from vector_service import VectorService
 
 
 class FakeFiles:
     def get_file_text(self, file_id):
         return "法规正文测试内容 " * 10
+
+
+class TestParseKbPath(unittest.TestCase):
+    """Router path parsing — by-id routes must not regress to 404."""
+
+    def test_by_id_get_patch_delete(self):
+        doc_id = "abc-123"
+        base = f"/api/admin/kb/documents/{doc_id}"
+        self.assertEqual(parse_kb_path(base, "GET"), ("get", doc_id))
+        self.assertEqual(parse_kb_path(base, "PATCH"), ("patch", doc_id))
+        self.assertEqual(parse_kb_path(base, "DELETE"), ("delete", doc_id))
+        self.assertEqual(
+            parse_kb_path(f"{base}/update", "POST"), ("update", doc_id)
+        )
+        # Trailing slash / query must not break index math
+        self.assertEqual(parse_kb_path(base + "/", "GET"), ("get", doc_id))
+        self.assertEqual(parse_kb_path(base + "?x=1", "GET"), ("get", doc_id))
+
+    def test_collection_and_unknown(self):
+        self.assertEqual(parse_kb_path("/api/admin/kb/documents", "GET"), ("list", None))
+        self.assertEqual(parse_kb_path("/api/admin/kb/documents", "POST"), ("create", None))
+        self.assertEqual(parse_kb_path("/api/admin/kb/search", "POST"), ("search", None))
+        self.assertEqual(parse_kb_path("/api/admin/kb/documents/x", "POST"), (None, None))
+        self.assertEqual(parse_kb_path("/api/admin/kb/other", "GET"), (None, None))
 
 
 class TestHttpKbApi(unittest.TestCase):
