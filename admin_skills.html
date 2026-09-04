@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>技能制作 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body class="admin-body" data-admin-page="skills">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>技能制作</h1>
+    <p class="muted" style="margin-bottom:24px">点击一行查看详情。技能正文是给模型看的操作说明，不会改 MCP 提示词模板。</p>
+    <div class="list-toolbar">
+      <span class="muted" id="listCount"></span>
+      <button type="button" class="btn-primary" id="btnNew">新建技能</button>
+    </div>
+    <p id="emptyHint" class="muted" hidden>暂无技能，请点击「新建技能」。</p>
+    <table class="data-table" id="skillTable" hidden>
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>标识</th>
+          <th>适用</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="skillBody"></tbody>
+    </table>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    const UI = window.AdminUI;
+    let skills = [];
+
+    function appliesText(sk) {
+      return (sk.applies_to || []).join("、") || "—";
+    }
+
+    function skillForm(sk, existing) {
+      const v = sk || {};
+      return '<form class="admin-form" id="skillForm">' +
+        '<label>标识</label><input id="skillId" required ' + (existing ? "readonly" : "") + ' value="' + UI.esc(v.id || "") + '" placeholder="例如 case-facts">' +
+        '<label>名称</label><input id="skillName" required value="' + UI.esc(v.name || "") + '">' +
+        '<label>描述（用于何时加载）</label><input id="skillDesc" value="' + UI.esc(v.description || "") + '">' +
+        '<label>适用于（逗号分隔）</label><input id="skillApplies" value="' + UI.esc((v.applies_to || []).join(", ")) + '">' +
+        '<label>技能正文</label><textarea id="skillBody" rows="10">' + UI.esc(v.body || "") + "</textarea></form>";
+    }
+
+    function readSkillForm() {
+      return {
+        id: document.getElementById("skillId").value.trim(),
+        name: document.getElementById("skillName").value.trim(),
+        description: document.getElementById("skillDesc").value.trim(),
+        applies_to: document.getElementById("skillApplies").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
+        body: document.getElementById("skillBody").value
+      };
+    }
+
+    function openView(sk) {
+      UI.openDrawer({
+        title: sk.name || sk.id,
+        body: '<dl class="detail-list">' +
+          "<dt>标识</dt><dd><code>" + UI.esc(sk.id) + "</code></dd>" +
+          "<dt>描述</dt><dd>" + UI.esc(sk.description || "（无）") + "</dd>" +
+          "<dt>适用于</dt><dd>" + UI.esc(appliesText(sk)) + "</dd>" +
+          "<dt>技能正文</dt><dd>" + UI.esc(sk.body || "（空）") + "</dd></dl>",
+        footer: '<button type="button" class="btn-ghost" id="btnEdit">修改</button>' +
+          '<button type="button" class="btn-danger-outline" id="btnDel">删除</button>'
+      });
+      document.getElementById("btnEdit").onclick = function () { openEdit(sk, true); };
+      document.getElementById("btnDel").onclick = function () { removeSkill(sk); };
+    }
+
+    function openEdit(sk, existing) {
+      UI.openDrawer({
+        title: existing ? "修改技能" : "新建技能",
+        body: skillForm(sk, existing),
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
+          '<button type="button" class="btn-primary" id="btnSave">保存</button>',
+        onReady: function () {
+          document.getElementById("btnSave").onclick = async function () {
+            const payload = readSkillForm();
+            const base = await UI.apiBase();
+            const url = existing ? base + "/api/skills/" + encodeURIComponent(payload.id) : base + "/api/skills";
+            const resp = await fetch(url, {
+              method: existing ? "PUT" : "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!resp.ok) {
+              UI.toast("保存失败", false);
+              return;
+            }
+            UI.toast("已保存");
+            UI.closeDrawer();
+            loadList();
+          };
+        }
+      });
+    }
+
+    async function removeSkill(sk) {
+      const ok = await UI.confirm({
+        title: "删除技能",
+        message: "确定删除「" + (sk.name || sk.id) + "」？此操作不可恢复。",
+        danger: true,
+        okText: "删除"
+      });
+      if (!ok) return;
+      const base = await UI.apiBase();
+      const resp = await fetch(base + "/api/skills/" + encodeURIComponent(sk.id), { method: "DELETE" });
+      if (!resp.ok) {
+        UI.toast("删除失败", false);
+        return;
+      }
+      UI.toast("已删除");
+      UI.closeDrawer();
+      loadList();
+    }
+
+    async function loadList() {
+      const base = await UI.apiBase();
+      const data = await (await fetch(base + "/api/skills")).json();
+      skills = data.skills || [];
+      const tbody = document.getElementById("skillBody");
+      const table = document.getElementById("skillTable");
+      const empty = document.getElementById("emptyHint");
+      document.getElementById("listCount").textContent = "共 " + skills.length + " 个技能";
+      tbody.innerHTML = "";
+      empty.hidden = skills.length > 0;
+      table.hidden = skills.length === 0;
+      skills.forEach(function (sk) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + UI.esc(sk.name || sk.id) + "</td><td><code>" + UI.esc(sk.id) + "</code></td><td>" +
+          UI.esc(appliesText(sk)) + '</td><td><div class="row-actions">' +
+          '<button type="button" class="btn-ghost" data-act="view">查看</button>' +
+          '<button type="button" class="btn-ghost" data-act="edit">修改</button>' +
+          '<button type="button" class="btn-danger-outline" data-act="del">删除</button></div></td>';
+        tr.addEventListener("click", function (e) {
+          const act = e.target.getAttribute("data-act");
+          if (act === "edit") { e.stopPropagation(); openEdit(sk, true); return; }
+          if (act === "del") { e.stopPropagation(); removeSkill(sk); return; }
+          if (act === "view") e.stopPropagation();
+          openView(sk);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    document.getElementById("btnNew").onclick = function () { openEdit(null, false); };
+    loadList().catch(function (err) { UI.toast(String(err), false); });
+  </script>
+</body>
+</html>

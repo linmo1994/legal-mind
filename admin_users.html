@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>用户管理 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; font-size: 14px; }
+    .admin-table th { background: #f8fafc; }
+    .form-grid label { display: block; margin: 10px 0 4px; font-size: 13px; }
+    .form-grid input[type=text], .form-grid input[type=password] { width: 100%; padding: 8px; box-sizing: border-box; }
+  </style>
+</head>
+<body class="admin-body" data-admin-page="users">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>用户管理</h1>
+    <p class="muted">创建账号并分配所级角色（主任 / 行政主管）。办案角色通过「案件」分案指定。</p>
+    <p id="status" class="muted"></p>
+    <button type="button" class="btn-primary" id="btnNew">新建用户</button>
+    <table class="admin-table" id="tbl" style="width:100%;margin-top:12px;border-collapse:collapse;background:#fff;">
+      <thead><tr><th>用户名</th><th>姓名</th><th>所级角色</th><th>状态</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    let base = "";
+    const FIRM = [["director","律所主任"],["admin_officer","行政主管"]];
+    async function api(path, opts) {
+      const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
+      const data = await resp.json().catch(function(){return {};});
+      if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      return data;
+    }
+    function roleChecks(selected) {
+      return FIRM.map(function (r) {
+        const on = (selected || []).indexOf(r[0]) >= 0;
+        return '<label><input type="checkbox" name="role" value="' + r[0] + '"' + (on ? " checked" : "") + "> " + r[1] + "</label>";
+      }).join("");
+    }
+    async function load() {
+      const data = await api("/api/admin/users");
+      const tb = document.querySelector("#tbl tbody");
+      tb.innerHTML = "";
+      data.users.forEach(function (u) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + AdminUI.esc(u.username) + "</td><td>" + AdminUI.esc(u.display_name) +
+          "</td><td>" + AdminUI.esc((u.roles||[]).join(", ")) + "</td><td>" + (u.is_active ? "启用" : "停用") + "</td><td></td>";
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "btn-ghost"; btn.textContent = "编辑";
+        btn.onclick = function () { editUser(u); };
+        tr.lastChild.appendChild(btn);
+        tb.appendChild(tr);
+      });
+    }
+    function editUser(u) {
+      const isNew = !u;
+      AdminUI.openDrawer({
+        title: isNew ? "新建用户" : "编辑用户",
+        body: '<div class="form-grid">' +
+          '<label>用户名</label><input id="f_user" ' + (isNew ? "" : "disabled") + ' value="' + AdminUI.esc(u && u.username || "") + '">' +
+          '<label>显示名</label><input id="f_name" value="' + AdminUI.esc(u && u.display_name || "") + '">' +
+          '<label>密码' + (isNew ? "" : "（留空不改）") + '</label><input id="f_pass" type="password">' +
+          '<div>' + roleChecks(u && u.roles) + "</div>" +
+          (isNew ? "" : '<label><input id="f_active" type="checkbox"' + (u.is_active ? " checked" : "") + "> 启用</label>") +
+          "</div>",
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
+          '<button type="button" class="btn-primary" id="f_save">保存</button>',
+        onReady: function () {
+          document.getElementById("f_save").onclick = async function () {
+            try {
+              const roles = [].map.call(document.querySelectorAll('input[name=role]:checked'), function (el) { return el.value; });
+              if (isNew) {
+                await api("/api/admin/users", { method: "POST", body: JSON.stringify({
+                  username: document.getElementById("f_user").value.trim(),
+                  display_name: document.getElementById("f_name").value.trim(),
+                  password: document.getElementById("f_pass").value,
+                  roles: roles
+                })});
+              } else {
+                const payload = { roles: roles, is_active: document.getElementById("f_active").checked };
+                const pw = document.getElementById("f_pass").value;
+                if (pw) payload.password = pw;
+                await api("/api/admin/users/" + u.id, { method: "PUT", body: JSON.stringify(payload) });
+              }
+              AdminUI.closeDrawer();
+              AdminUI.toast("已保存", true);
+              load();
+            } catch (e) { AdminUI.toast(e.message, false); }
+          };
+        }
+      });
+    }
+    document.getElementById("btnNew").onclick = function () { editUser(null); };
+    (async function () {
+      if (!LegalMindAuth.requireLogin()) return;
+      base = await LegalMindAuth.mcpBase();
+      try { await load(); } catch (e) {
+        document.getElementById("status").textContent = e.message;
+        document.getElementById("status").className = "status-err";
+      }
+    })();
+  </script>
+</body>
+</html>

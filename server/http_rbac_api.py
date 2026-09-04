@@ -96,7 +96,23 @@ class RbacHttpApi:
     def list_users(self, authorization: Optional[str]) -> StatusPayload:
         gated = self.require_perm(authorization, "cap.user_manage")
         if gated[0] != 200:
-            return gated
+            # 分案场景：行政主管可拉取可入案人员简表
+            gated2 = self.require_perm(authorization, "cap.case_assign")
+            if gated2[0] != 200:
+                return gated
+            users = []
+            for u in self.store.list_users():
+                roles = self.store.list_user_role_codes(u["id"])
+                if set(roles) & {"director", "admin_officer"}:
+                    continue
+                users.append({
+                    "id": u["id"],
+                    "username": u["username"],
+                    "display_name": u["display_name"],
+                    "roles": roles,
+                    "is_active": bool(u.get("is_active")),
+                })
+            return _ok({"users": users})
         users = []
         for u in self.store.list_users():
             item = dict(u)

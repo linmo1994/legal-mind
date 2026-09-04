@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>角色管理 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .role-card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:16px; margin:12px 0; }
+    .role-card h3 { margin:0 0 6px; font-size:1rem; }
+    .perm-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:6px; margin-top:10px; font-size:13px; }
+  </style>
+</head>
+<body class="admin-body" data-admin-page="roles">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>角色管理</h1>
+    <p class="muted">内置五角色不可删除。所级角色直接赋权；案级角色权限在入案后生效。</p>
+    <p id="status" class="muted"></p>
+    <div id="list"></div>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    let base = "", allPerms = [];
+    async function api(path, opts) {
+      const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
+      const data = await resp.json().catch(function(){return {};});
+      if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      return data;
+    }
+    async function load() {
+      const [roles, perms] = await Promise.all([api("/api/admin/roles"), api("/api/admin/permissions")]);
+      allPerms = perms.permissions || [];
+      const list = document.getElementById("list");
+      list.innerHTML = "";
+      (roles.roles || []).forEach(function (r) {
+        const card = document.createElement("div");
+        card.className = "role-card";
+        card.innerHTML = "<h3>" + AdminUI.esc(r.name) + " <code>" + AdminUI.esc(r.code) + "</code></h3>" +
+          "<p class='muted'>" + AdminUI.esc(r.track === "firm" ? "所级" : "案级") + " · " + AdminUI.esc(r.description || "") + "</p>" +
+          "<div class='perm-grid' id='g_" + r.code + "'></div>" +
+          "<button type='button' class='btn-primary' data-code='" + r.code + "'>保存权限</button>";
+        list.appendChild(card);
+        const grid = card.querySelector(".perm-grid");
+        const selected = r.permissions || [];
+        allPerms.forEach(function (p) {
+          const lab = document.createElement("label");
+          const on = selected.indexOf(p.code) >= 0;
+          lab.innerHTML = '<input type="checkbox" value="' + AdminUI.esc(p.code) + '"' + (on ? " checked" : "") + "> " + AdminUI.esc(p.name);
+          grid.appendChild(lab);
+        });
+        card.querySelector("button").onclick = async function () {
+          const codes = [].map.call(grid.querySelectorAll("input:checked"), function (el) { return el.value; });
+          try {
+            await api("/api/admin/roles/" + r.code, { method: "PUT", body: JSON.stringify({ permissions: codes }) });
+            AdminUI.toast("已保存 " + r.name, true);
+          } catch (e) { AdminUI.toast(e.message, false); }
+        };
+      });
+    }
+    (async function () {
+      if (!LegalMindAuth.requireLogin()) return;
+      base = await LegalMindAuth.mcpBase();
+      try { await load(); } catch (e) {
+        document.getElementById("status").textContent = e.message;
+        document.getElementById("status").className = "status-err";
+      }
+    })();
+  </script>
+</body>
+</html>

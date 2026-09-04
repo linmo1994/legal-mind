@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理后台 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body class="admin-body" data-admin-page="hub">
+  <div class="admin-wrap">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>管理后台</h1>
+    <p class="muted">当前办公配置与知识库规模。功能入口在上方标签。</p>
+    <p id="statsStatus" class="muted" hidden></p>
+    <div class="stats-grid" id="statsGrid">
+      <a class="stats-card" href="admin_skills.html" data-page="admin_skills.html">
+        <div class="stats-label">技能</div>
+        <div class="stats-value" id="statSkills">—</div>
+        <div class="stats-hint">已制作的 Skill 包</div>
+      </a>
+      <a class="stats-card" href="admin_mcp.html" data-page="admin_mcp.html">
+        <div class="stats-label">MCP</div>
+        <div class="stats-value" id="statMcp">—</div>
+        <div class="stats-hint" id="statMcpHint">已注册工具</div>
+      </a>
+      <a class="stats-card" href="vectorize.html" data-page="vectorize.html">
+        <div class="stats-label">向量化文档</div>
+        <div class="stats-value" id="statDocs">—</div>
+        <div class="stats-hint" id="statDocsHint">写入向量库的文书</div>
+      </a>
+    </div>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script>
+    document.querySelectorAll('.stats-card[data-page]').forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        if (window.parent && window.parent.loadPage) {
+          e.preventDefault();
+          window.parent.loadPage(a.getAttribute('data-page'));
+        }
+      });
+    });
+    (async function loadStats() {
+      if (window.LegalMindAuth && !LegalMindAuth.requireLogin()) return;
+      const status = document.getElementById('statsStatus');
+      try {
+        const cfg = await (await fetch('config.json?t=' + Date.now())).json();
+        const host = (!cfg.mcp_server.host || cfg.mcp_server.host === 'localhost')
+          ? '127.0.0.1' : cfg.mcp_server.host;
+        const base = 'http://' + host + ':' + cfg.mcp_server.port;
+        const data = await (await fetch(base + '/api/admin/stats')).json();
+        document.getElementById('statSkills').textContent = data.skill_count;
+        document.getElementById('statMcp').textContent = data.mcp_tool_count;
+        document.getElementById('statMcpHint').textContent =
+          '工具 ' + data.mcp_tool_count + ' · 提示词 ' + data.mcp_prompt_count + ' · 资源 ' + data.mcp_resource_count;
+        document.getElementById('statDocs').textContent = data.document_count;
+        let docHint = '写入向量库的文书';
+        if (data.chunk_count != null && data.chunk_count !== data.document_count) {
+          docHint += '（分块 ' + data.chunk_count + '）';
+        }
+        if (data.vector_error) {
+          docHint = data.vector_error;
+        }
+        document.getElementById('statDocsHint').textContent = docHint;
+      } catch (err) {
+        status.hidden = false;
+        status.textContent = '无法加载统计：' + err;
+        status.className = 'status-err';
+      }
+    })();
+  </script>
+</body>
+</html>

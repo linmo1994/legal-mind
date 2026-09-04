@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .login-card {
+      max-width: 400px;
+      margin: 80px auto;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 28px 28px 24px;
+    }
+    .login-card h1 { font-size: 1.4rem; margin: 0 0 6px; }
+    .login-card label { display: block; margin: 14px 0 6px; font-size: 14px; color: #374151; }
+    .login-card input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 15px;
+    }
+    .login-card .btn-primary {
+      width: 100%;
+      margin-top: 18px;
+      padding: 10px;
+      border: 0;
+      border-radius: 8px;
+      background: #1a4a6e;
+      color: #fff;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    .login-error { color: #b91c1c; margin-top: 12px; font-size: 14px; min-height: 1.2em; }
+  </style>
+</head>
+<body class="admin-body">
+  <div class="login-card">
+    <h1>LegalMind 登录</h1>
+    <p class="muted">律所账号登录后使用对话与管理功能</p>
+    <label for="username">用户名</label>
+    <input id="username" autocomplete="username" value="director">
+    <label for="password">密码</label>
+    <input id="password" type="password" autocomplete="current-password" placeholder="初始密码见部署说明">
+    <button type="button" class="btn-primary" id="loginBtn">登录</button>
+    <p class="login-error" id="err"></p>
+    <p class="muted" style="margin-top:16px;font-size:12px;">种子主任账号：director / ChangeMe123!（请尽快修改）</p>
+  </div>
+  <script src="auth.js"></script>
+  <script>
+    (function () {
+      const params = new URLSearchParams(location.search);
+      const next = params.get("next") || "home.html";
+      if (LegalMindAuth.getToken()) {
+        go(next);
+      }
+      async function go(page) {
+        if (window.parent && window.parent !== window && window.parent.loadPage) {
+          window.parent.loadPage(page);
+        } else {
+          location.href = page;
+        }
+      }
+      document.getElementById("loginBtn").onclick = async function () {
+        const err = document.getElementById("err");
+        err.textContent = "";
+        try {
+          await LegalMindAuth.login(
+            document.getElementById("username").value.trim(),
+            document.getElementById("password").value
+          );
+          go(next);
+        } catch (e) {
+          err.textContent = e.message || String(e);
+        }
+      };
+      document.getElementById("password").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") document.getElementById("loginBtn").click();
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -3,7 +3,7 @@
  * 实现MCP协议通信、LLM交互、会话管理等功能
  */
 
-const MCP_CLIENT_VERSION = '2026.01.15-1';
+const MCP_CLIENT_VERSION = '2026.09.04-workflow';
 console.log(`[MCP] mcp_client.js loaded, version=${MCP_CLIENT_VERSION}`);
 
 // ============================================
@@ -458,6 +458,18 @@ async function init() {
     
     // 加载配置（使用缓存）
     await loadConfigCached();
+
+    if (typeof LegalMindAuth !== 'undefined') {
+      if (!LegalMindAuth.getToken()) {
+        LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
+        return;
+      }
+      try {
+        await loadActiveCaseOptions();
+      } catch (e) {
+        console.warn('加载案件列表失败', e);
+      }
+    }
     
   // 不在这里创建会话，等用户第一次发送消息时再创建
     console.log('=== 跳过创建会话（等用户发送消息时再创建） ===');
@@ -2347,13 +2359,22 @@ window.handleUserInput = async function(userInputText = null) {
   // 因为buildRequestData需要使用不包含当前输入的conversation_history
   // 用户输入会在收到响应后和助手响应一起添加到历史中
   
+  console.log('✅ 准备使用 fullUserMessage，长度:', fullUserMessage.length);
+
+  const orchestrated = await tryHandleOrchestrate(fullUserMessage);
+  if (orchestrated) {
+    isGenerating = false;
+    currentAbortController = null;
+    if (typeof setStopButtonState === 'function') setStopButtonState(false);
+    isProcessingInput = false;
+    return;
+  }
+
   // 初始化流式消息容器
   const streamingMsg = addStreamingMessage();
   let accumulatedContent = '';
   let thinkingContent = '';
   let conclusionContent = '';
-  
-  console.log('✅ 准备使用 fullUserMessage，长度:', fullUserMessage.length);
   
   try {
     console.log('步骤1: 组装请求数据');
@@ -3329,6 +3350,7 @@ async function handleResourceInvocation(responseData, thinkingContent = '', conc
   
   // 在调用前展示参数
   const invocationMessage = addToolInvocationMessage('resource', resourceUri, parameters, 'calling');
+  rememberMcpCapability(resourceUri, MCP_CAPABILITY_LABELS[resourceUri], 'resource');
   
   // 默认自动批准工具调用
   const autoApprove = true;
@@ -3535,6 +3557,7 @@ async function handleToolInvocation(responseData, thinkingContent = '', conclusi
   
   // 在调用前展示参数
   const invocationMessage = addToolInvocationMessage('tool', toolName, parameters, 'calling');
+  rememberMcpCapability(toolName, toolName, 'tool');
   
   // 默认自动批准工具调用
   const autoApprove = true;
@@ -3715,6 +3738,7 @@ async function handlePromptInvocation(responseData, thinkingContent = '', conclu
   
   console.log('提示词模板名称:', promptName);
   console.log('参数:', parameters);
+  rememberMcpCapability(promptName, MCP_CAPABILITY_LABELS[promptName] || promptName, 'prompt');
   
   try {
     updateStatus('正在获取提示词模板...', 'connecting');
@@ -4174,7 +4198,458 @@ function showToolApproval(resourceUri, parameters) {
 }
 
 // 添加消息
-function addMessage(role, content, type = 'normal') {
+async function loadActiveCaseOptions() {
+  const sel = document.getElementById('activeCaseSelect');
+  if (!sel || !CONFIG || !CONFIG.mcpServerUrl || typeof LegalMindAuth === 'undefined') return;
+  const resp = await fetch(`${CONFIG.mcpServerUrl}/api/admin/cases`, {
+    headers: LegalMindAuth.authHeaders()
+  });
+  if (resp.status === 401) {
+    LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
+    return;
+  }
+  if (!resp.ok) throw new Error('cases HTTP ' + resp.status);
+  const data = await resp.json();
+  const current = LegalMindAuth.getCaseId();
+  sel.innerHTML = '<option value="">请选择案件…</option>';
+  (data.cases || []).forEach(function (c) {
+    const opt = document.createElement('option');
+    opt.value = String(c.id);
+    opt.textContent = (c.case_no || '') + ' · ' + (c.title || '');
+    if (current != null && String(current) === String(c.id)) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.onchange = function () {
+    const v = sel.value ? parseInt(sel.value, 10) : null;
+    LegalMindAuth.setCaseId(v);
+  };
+  if (!sel.value && sel.options.length > 1) {
+    sel.selectedIndex = 1;
+    LegalMindAuth.setCaseId(parseInt(sel.value, 10));
+  }
+}
+
+function tryHandleOrchestrate(fullUserMessage) {
+  return (async function() {
+    if (!CONFIG || !CONFIG.mcpServerUrl) return false;
+    let shell = null;
+    try {
+      shell = addOrchestrateProgressShell();
+      paintOrchestrateFlow(shell.flowSlot, [], 0, -1);
+      const resp = await fetch(`${CONFIG.mcpServerUrl}/api/orchestrate`, {
+        method: 'POST',
+        headers: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
+          ? LegalMindAuth.authHeaders()
+          : { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_text: fullUserMessage,
+          session_id: currentSession && currentSession.sessionId,
+          messages: (currentSession && currentSession.conversationHistory) || [],
+          case_id: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.getCaseId)
+            ? LegalMindAuth.getCaseId()
+            : null
+        })
+      });
+      if (resp.status === 401) {
+        if (typeof LegalMindAuth !== 'undefined') LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
+        if (shell && shell.wrap) shell.wrap.remove();
+        return true;
+      }
+      if (resp.status === 400 || resp.status === 403) {
+        const errBody = await resp.json().catch(function () { return {}; });
+        if (shell && shell.answer) {
+          shell.answer.hidden = false;
+          shell.answer.textContent = errBody.error || ('请求失败 ' + resp.status);
+        }
+        return true;
+      }
+      const data = await resp.json();
+      if (!data || data.legacy) {
+        if (shell && shell.wrap) shell.wrap.remove();
+        return false;
+      }
+      const flow = (data.capabilities && data.capabilities.flow) || data.flow || [];
+      if (typeof currentStreamingMessage !== 'undefined' && currentStreamingMessage) {
+        try { currentStreamingMessage.remove(); } catch (e) {}
+        currentStreamingMessage = null;
+      }
+      paintOrchestrateFlow(shell.flowSlot, flow, flow.length, -1);
+      const answer = ((data.visible_text || '') + (data.pending_question ? '\n\n' + data.pending_question : '')).trim();
+      if (!answer && !flow.length) {
+        if (shell && shell.wrap) shell.wrap.remove();
+        return false;
+      }
+      if (shell.answer) {
+        shell.answer.hidden = !answer;
+        shell.answer.textContent = answer;
+      } else {
+        shell.content.hidden = false;
+        shell.content.textContent = answer;
+      }
+      if (data.artifact && data.artifact.file_id) {
+        addOrchestrateDownload(data.artifact);
+      }
+      if (currentSession) {
+        currentSession.conversationHistory.push({ role: 'user', content: fullUserMessage });
+        currentSession.conversationHistory.push({
+          role: 'assistant',
+          content: data.visible_text,
+          artifact: data.artifact || undefined,
+          capabilities: data.capabilities || undefined
+        });
+        if (currentSession.sessionId && typeof addMessageToServer === 'function' && !data.saved_to_session) {
+          addMessageToServer(currentSession.sessionId, 'user', fullUserMessage).catch(() => {});
+          const extra = {};
+          if (data.artifact) extra.artifact = data.artifact;
+          if (data.capabilities) extra.capabilities = data.capabilities;
+          addMessageToServer(currentSession.sessionId, 'assistant', data.visible_text, Object.keys(extra).length ? extra : null).catch(() => {});
+        }
+        if (typeof saveSession === 'function') {
+          saveSession(currentSession).catch(() => {});
+        }
+      }
+      console.log('✅ orchestrate handled', data.agent || '');
+      return true;
+    } catch (err) {
+      console.warn('orchestrate fallback to single-agent path:', err);
+      if (shell && shell.wrap && shell.wrap.parentNode) shell.wrap.remove();
+      return false;
+    }
+  })();
+}
+
+function addOrchestrateDownload(artifact) {
+  if (!elements.chatMessages || !artifact) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'message assistant';
+  const header = document.createElement('div');
+  header.className = 'message-header';
+  header.textContent = '⚖️ LegalMind';
+  const content = document.createElement('div');
+  content.className = 'message-content generated-doc-wrap';
+
+  const card = document.createElement('div');
+  card.className = 'generated-doc-card';
+
+  const top = document.createElement('div');
+  top.className = 'generated-doc-main';
+  const icon = document.createElement('div');
+  icon.className = 'file-icon-container docx';
+  icon.textContent = 'W';
+  const info = document.createElement('div');
+  info.className = 'file-info';
+  const name = document.createElement('div');
+  name.className = 'file-name';
+  name.textContent = artifact.filename || '法律文书.docx';
+  const meta = document.createElement('div');
+  meta.className = 'file-size';
+  meta.textContent = (artifact.title || 'Word 文书') + ' · 可下载核阅';
+  info.appendChild(name);
+  info.appendChild(meta);
+  top.appendChild(icon);
+  top.appendChild(info);
+
+  const preview = document.createElement('div');
+  preview.className = 'generated-doc-preview';
+  preview.hidden = true;
+  preview.textContent = artifact.preview || '暂无预览，请下载 Word 查看全文。';
+
+  const tabs = document.createElement('div');
+  tabs.className = 'generated-doc-tabs';
+  const tabPreview = document.createElement('button');
+  tabPreview.type = 'button';
+  tabPreview.className = 'generated-doc-tab';
+  tabPreview.textContent = '预览';
+  const tabDownload = document.createElement('button');
+  tabDownload.type = 'button';
+  tabDownload.className = 'generated-doc-tab';
+  tabDownload.textContent = '下载';
+  tabs.appendChild(tabPreview);
+  tabs.appendChild(tabDownload);
+
+  tabPreview.onclick = () => {
+    preview.hidden = !preview.hidden;
+    tabPreview.classList.toggle('active', !preview.hidden);
+  };
+  tabDownload.onclick = () => {
+    tabDownload.classList.add('active');
+    tabPreview.classList.remove('active');
+    preview.hidden = true;
+    downloadFileFromCard(artifact.file_id, artifact.filename || '法律文书.docx');
+  };
+
+  card.appendChild(top);
+  card.appendChild(preview);
+  card.appendChild(tabs);
+  content.appendChild(card);
+  wrap.appendChild(header);
+  wrap.appendChild(content);
+  elements.chatMessages.appendChild(wrap);
+  elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+}
+
+const MCP_CAPABILITY_LABELS = {
+  'legal://law_regulation': '法律法规',
+  'legal://similar_cases': '类案检索',
+  'legal://doc_template': '文书模板',
+  'legal://contract_review_rules': '合同审查规则',
+  gen_legal_doc_guide: '生成法律文书提示词',
+  contract_review_guide: '合同审查提示词',
+  judge_work_guide: '法官工作指南'
+};
+
+function emptyCapabilities() {
+  return { agents: [], skills: [], mcp: [], trace: [] };
+}
+
+function hasCapabilities(caps) {
+  if (!caps) return false;
+  if (caps.flow && caps.flow.length) return true;
+  if (caps.trace && caps.trace.length) return true;
+  return !!((caps.agents && caps.agents.length) || (caps.skills && caps.skills.length) || (caps.mcp && caps.mcp.length));
+}
+
+function rememberMcpCapability(id, name, mcpKind) {
+  if (!currentSession || !id) return;
+  currentSession.turnCapabilities = currentSession.turnCapabilities || emptyCapabilities();
+  const list = currentSession.turnCapabilities.mcp;
+  if (list.some(function (item) { return item.id === id; })) return;
+  list.push({
+    kind: 'mcp',
+    mcp_kind: mcpKind || 'resource',
+    id: id,
+    name: name || MCP_CAPABILITY_LABELS[id] || id
+  });
+}
+
+function consumeTurnCapabilities() {
+  if (!currentSession) return null;
+  const caps = currentSession.turnCapabilities;
+  currentSession.turnCapabilities = emptyCapabilities();
+  if (!hasCapabilities(caps)) return null;
+  currentSession._pendingCapabilities = caps;
+  return caps;
+}
+
+function kindLabel(kind) {
+  if (kind === 'skill') return 'Skill';
+  if (kind === 'agent') return 'Agent';
+  if (kind === 'result') return '结果';
+  return 'MCP';
+}
+
+function renderCapabilityFlow(flow, opts) {
+  opts = opts || {};
+  const visible = opts.visibleCount == null ? flow.length : opts.visibleCount;
+  const running = opts.runningIndex == null ? -1 : opts.runningIndex;
+  const wrap = document.createElement('div');
+  wrap.className = 'capability-trace capability-flow-wrap';
+  wrap.setAttribute('aria-label', '调用流程');
+  const title = document.createElement('div');
+  title.className = 'capability-trace-title';
+  title.textContent = '实际工作流';
+  wrap.appendChild(title);
+  const list = document.createElement('div');
+  list.className = 'capability-flow';
+  if (!flow || !flow.length) {
+    const wait = document.createElement('div');
+    wait.className = 'capability-flow-wait';
+    wait.textContent = '正在编排，完成后会列出本次实际调用的 Agent / Skill / MCP';
+    wrap.appendChild(wait);
+    return wrap;
+  }
+  flow.forEach(function (item, index) {
+    const row = document.createElement('div');
+    row.className = 'capability-flow-item';
+    if (index > 0) {
+      const arrow = document.createElement('div');
+      arrow.className = 'capability-flow-arrow' + (index < visible ? ' on' : '');
+      arrow.textContent = '↓';
+      row.appendChild(arrow);
+    }
+    const step = document.createElement('div');
+    const on = index < visible;
+    const isRun = index === running;
+    step.className = 'capability-flow-step capability-chip ' + (item.kind || 'mcp')
+      + (on ? ' on' : '')
+      + (isRun ? ' running' : '')
+      + (on && !isRun ? ' done' : '');
+    const kindEl = document.createElement('span');
+    kindEl.className = 'capability-kind';
+    kindEl.textContent = kindLabel(item.kind);
+    const label = document.createElement('span');
+    label.textContent = item.name || item.id;
+    step.appendChild(kindEl);
+    step.appendChild(label);
+    if (item.id && item.id !== item.name) {
+      const idEl = document.createElement('code');
+      idEl.className = 'capability-id';
+      idEl.textContent = item.id;
+      step.appendChild(idEl);
+    }
+    step.title = (kindLabel(item.kind) + ' ' + (item.name || '') + ' ' + (item.id || '')).trim();
+    row.appendChild(step);
+    list.appendChild(row);
+  });
+  wrap.appendChild(list);
+  return wrap;
+}
+
+function renderCapabilityTrace(caps) {
+  if (!caps) return null;
+  if (caps.flow && caps.flow.length) {
+    return renderCapabilityFlow(caps.flow, { visibleCount: caps.flow.length, runningIndex: -1 });
+  }
+  if (!hasCapabilities(caps)) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'capability-trace';
+  wrap.setAttribute('aria-label', '本次调用的 Agent、Skill 与 MCP');
+  const title = document.createElement('div');
+  title.className = 'capability-trace-title';
+  title.textContent = '本次调用（Agent / Skill / MCP）';
+  wrap.appendChild(title);
+  const row = document.createElement('div');
+  row.className = 'capability-trace-row';
+  const items = (caps.trace && caps.trace.length)
+    ? caps.trace
+    : [].concat(caps.agents || []).concat(caps.skills || []).concat(caps.mcp || []);
+  items.forEach(function (item) {
+    const chip = document.createElement('span');
+    const kind = item.kind || 'mcp';
+    chip.className = 'capability-chip ' + kind;
+    const kindText = kindLabel(kind);
+    chip.title = kindText + ' ' + (item.id || item.name || '');
+    const kindEl = document.createElement('span');
+    kindEl.className = 'capability-kind';
+    kindEl.textContent = kindText;
+    const label = document.createElement('span');
+    label.textContent = item.name || item.id;
+    chip.appendChild(kindEl);
+    chip.appendChild(label);
+    row.appendChild(chip);
+  });
+  wrap.appendChild(row);
+  return wrap;
+}
+
+function previewOrchestrateFlow(text) {
+  const t = text || '';
+  const steps = [{ kind: 'agent', id: 'orchestrator', name: '任务编排' }];
+  if (/起诉状|生成文书|写一份|起草|导出文书|判决书|协议书/.test(t)) {
+    steps.push({ kind: 'agent', id: 'doc_writing', name: '文书写作' });
+  } else if (/检索|法条|类案|法规/.test(t) && t.indexOf('分析') < 0) {
+    steps.push({ kind: 'agent', id: 'legal_retrieval', name: '法规类案检索' });
+  } else {
+    steps.push({ kind: 'agent', id: 'text_analysis', name: '文本分析' });
+  }
+  steps.push({ kind: 'skill', id: 'skill', name: '调用 Skill' });
+  steps.push({ kind: 'mcp', id: 'mcp', name: '调用 MCP' });
+  const resultName = /起诉状|生成文书|写一份|起草|导出文书/.test(t) ? '返回文书结果' : '返回分析结果';
+  steps.push({ kind: 'result', id: 'return', name: resultName });
+  return steps;
+}
+
+function addOrchestrateProgressShell() {
+  const messageDiv = document.createElement('div');
+  messageDiv.className = 'message assistant orchestrate-turn';
+  const headerDiv = document.createElement('div');
+  headerDiv.className = 'message-header';
+  headerDiv.textContent = '⚖️ LegalMind';
+  const contentDiv = document.createElement('div');
+  contentDiv.className = 'message-content';
+  const flowSlot = document.createElement('div');
+  flowSlot.className = 'orchestrate-flow-slot';
+  const answerEl = document.createElement('div');
+  answerEl.className = 'orchestrate-answer';
+  answerEl.hidden = true;
+  contentDiv.appendChild(flowSlot);
+  contentDiv.appendChild(answerEl);
+  messageDiv.appendChild(headerDiv);
+  messageDiv.appendChild(contentDiv);
+  if (elements.chatMessages) {
+    elements.chatMessages.appendChild(messageDiv);
+    elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+  }
+  return { wrap: messageDiv, flowSlot: flowSlot, content: contentDiv, answer: answerEl };
+}
+
+function paintOrchestrateFlow(slot, flow, visibleCount, runningIndex) {
+  if (!slot) return;
+  slot.innerHTML = '';
+  slot.appendChild(renderCapabilityFlow(flow, {
+    visibleCount: visibleCount,
+    runningIndex: runningIndex
+  }));
+}
+
+function sleepMs(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
+async function consumeOrchestrateSSE(resp, onStep) {
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let result = null;
+  while (true) {
+    const read = await reader.read();
+    if (read.done) break;
+    buf += decoder.decode(read.value, { stream: true });
+    const chunks = buf.split('\n\n');
+    buf = chunks.pop() || '';
+    chunks.forEach(function (chunk) {
+      const lines = chunk.split('\n');
+      let payload = '';
+      lines.forEach(function (line) {
+        if (line.indexOf('data:') === 0) {
+          payload += line.replace(/^data:\s?/, '');
+        }
+      });
+      if (!payload) return;
+      try {
+        const msg = JSON.parse(payload);
+        if (msg.type === 'step' && typeof onStep === 'function') onStep(msg);
+        if (msg.type === 'done') result = msg.result;
+      } catch (e) {
+        console.warn('orchestrate SSE chunk parse skipped', e);
+      }
+    });
+  }
+  if (buf.trim()) {
+    try {
+      const leftover = buf.split('\n').filter(function (line) {
+        return line.indexOf('data:') === 0;
+      }).map(function (line) {
+        return line.replace(/^data:\s?/, '');
+      }).join('');
+      if (leftover) {
+        const msg = JSON.parse(leftover);
+        if (msg.type === 'done') result = msg.result;
+      }
+    } catch (e) {}
+  }
+  return result;
+}
+
+async function playOrchestrateFlow(slot, flow) {
+  if (!slot || !flow || !flow.length) return;
+  for (let i = 0; i < flow.length; i++) {
+    paintOrchestrateFlow(slot, flow, i + 1, i);
+    if (elements.chatMessages) {
+      elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+    }
+    await sleepMs(320);
+  }
+  paintOrchestrateFlow(slot, flow, flow.length, -1);
+}
+
+function appendCapabilityTrace(host, caps) {
+  if (!host) return;
+  const bar = renderCapabilityTrace(caps);
+  if (bar) host.appendChild(bar);
+}
+
+function addMessage(role, content, type = 'normal', capabilities = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
   
@@ -4193,7 +4668,13 @@ function addMessage(role, content, type = 'normal') {
   }
   
   messageDiv.appendChild(headerDiv);
+  if (role === 'assistant' && capabilities && capabilities.flow && capabilities.flow.length) {
+    appendCapabilityTrace(messageDiv, capabilities);
+  }
   messageDiv.appendChild(contentDiv);
+  if (role === 'assistant' && !(capabilities && capabilities.flow && capabilities.flow.length)) {
+    appendCapabilityTrace(messageDiv, capabilities);
+  }
   
   elements.chatMessages.appendChild(messageDiv);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
@@ -5259,7 +5740,7 @@ function parseJsonAndExtractConclusion(jsonString) {
 }
 
 // 添加完整的合并消息（非流式）
-function addCombinedMessage(thinkingContent, conclusionContent) {
+function addCombinedMessage(thinkingContent, conclusionContent, capabilities) {
   console.log('=== addCombinedMessage 被调用 ===');
   console.log('思考内容长度:', thinkingContent ? thinkingContent.length : 0);
   console.log('结论内容长度:', conclusionContent ? conclusionContent.length : 0);
@@ -5353,6 +5834,9 @@ function addCombinedMessage(thinkingContent, conclusionContent) {
     console.error('思考内容:', thinkingContent);
     console.error('结论内容:', conclusionContent);
   }
+
+  const caps = capabilities === undefined ? consumeTurnCapabilities() : capabilities;
+  appendCapabilityTrace(messageWrapper, caps);
   
   elements.chatMessages.appendChild(messageWrapper);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
@@ -5482,11 +5966,17 @@ async function saveSession(session) {
 }
 
 // 添加消息到服务端（带超时机制，不阻塞主流程）
-async function addMessageToServer(sessionId, role, content) {
+async function addMessageToServer(sessionId, role, content, extra) {
   // 如果sessionId为null或undefined，跳过保存到服务端（只保存到本地历史）
   if (!sessionId) {
     console.warn('⚠️ sessionId为空，跳过保存消息到服务端（仅保存到本地历史）');
     return;
+  }
+
+  if (role === 'assistant' && currentSession && currentSession._pendingCapabilities) {
+    extra = extra || {};
+    if (!extra.capabilities) extra.capabilities = currentSession._pendingCapabilities;
+    currentSession._pendingCapabilities = null;
   }
 
   if (content == null) {
@@ -5516,7 +6006,8 @@ async function addMessageToServer(sessionId, role, content) {
       },
       body: JSON.stringify({
         role: role,
-        content: content
+        content: content,
+        extra: extra || undefined
       }),
       signal: controller.signal
     });
@@ -5663,7 +6154,7 @@ async function loadSessionList() {
       <div style="text-align: center; color: #f44336; padding: 20px;">
         <div style="font-size: 0.9rem; margin-bottom: 8px;">加载失败</div>
         <div style="font-size: 0.8rem; color: #999; margin-bottom: 12px;">${error.message || '未知错误'}</div>
-        <button onclick="location.reload()" style="background: #2d5be3; color: #fff; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 0.85rem;">刷新重试</button>
+        <button onclick="location.reload()" style="background: #1a4a6e; color: #fff; border: none; padding: 6px 16px; border-radius: 4px; cursor: pointer; font-size: 0.85rem;">刷新重试</button>
       </div>
     `;
     elements.sessionList.appendChild(errorDiv);
@@ -6575,6 +7066,62 @@ async function deleteSession(sessionId) {
   }
 }
 
+function restoreHistoryMessage(msg) {
+  if (msg.role === 'user') {
+    addMessage(msg.role, msg.content);
+    return;
+  }
+  if (msg.role === 'assistant') {
+    const content = msg.content || '';
+    const separator = '==JSON==';
+    const separatorIndex = content.indexOf(separator);
+    if (separatorIndex !== -1) {
+      const thinkingContent = content.substring(0, separatorIndex).trim();
+      const conclusionContent = content.substring(separatorIndex + separator.length).trim();
+      addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities);
+    } else {
+      const doubleLineBreakIndex = content.indexOf('\n\n');
+      if (doubleLineBreakIndex !== -1 && doubleLineBreakIndex < content.length / 3 && !msg.artifact) {
+        const thinkingContent = content.substring(0, doubleLineBreakIndex).trim();
+        const conclusionContent = content.substring(doubleLineBreakIndex + 2).trim();
+        addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities);
+      } else if (content) {
+        addMessage(msg.role, content, 'normal', msg.capabilities);
+      }
+    }
+    if (msg.artifact && msg.artifact.file_id) {
+      addOrchestrateDownload(msg.artifact);
+    }
+    return;
+  }
+  addMessage(msg.role, msg.content);
+}
+
+async function restoreGeneratedFilesForSession(sessionId, history) {
+  if (!sessionId || !CONFIG || !CONFIG.mcpServerUrl) return;
+  const known = new Set();
+  (history || []).forEach(msg => {
+    if (msg.artifact && msg.artifact.file_id) known.add(msg.artifact.file_id);
+  });
+  try {
+    const resp = await fetch(`${CONFIG.mcpServerUrl}/api/files?session_id=${encodeURIComponent(sessionId)}`);
+    if (!resp.ok) return;
+    const files = await resp.json();
+    (files || []).forEach(file => {
+      if (!file.file_id || known.has(file.file_id)) return;
+      if (file.description !== 'orchestrator doc_writing') return;
+      addOrchestrateDownload({
+        file_id: file.file_id,
+        filename: file.original_name,
+        title: 'Word 文书',
+        download_url: `/api/files/${file.file_id}/download`
+      });
+    });
+  } catch (err) {
+    console.warn('恢复会话生成文件失败:', err);
+  }
+}
+
 // 加载会话（从服务端）
 async function loadSession(sessionId) {
   try {
@@ -6606,44 +7153,9 @@ async function loadSession(sessionId) {
     };
     
   elements.chatMessages.innerHTML = '';
-  
-  // 恢复对话历史
   console.log('恢复对话历史，消息数量:', currentSession.conversationHistory.length);
-  currentSession.conversationHistory.forEach((msg, index) => {
-    if (msg.role === 'user') {
-      // 用户消息直接显示
-    addMessage(msg.role, msg.content);
-    } else if (msg.role === 'assistant') {
-      // AI消息可能包含思考内容和结论内容（用 ==JSON== 分隔）
-      const content = msg.content || '';
-      const separator = '==JSON==';
-      const separatorIndex = content.indexOf(separator);
-      
-      if (separatorIndex !== -1) {
-        // 包含思考内容和结论内容
-        const thinkingContent = content.substring(0, separatorIndex).trim();
-        const conclusionContent = content.substring(separatorIndex + separator.length).trim();
-        console.log(`消息 ${index}: 包含思考内容和结论内容，思考长度: ${thinkingContent.length}, 结论长度: ${conclusionContent.length}`);
-        addCombinedMessage(thinkingContent, conclusionContent);
-      } else {
-        // 只有结论内容，检查是否包含思考内容（使用 \n\n 分隔的情况）
-        const doubleLineBreakIndex = content.indexOf('\n\n');
-        if (doubleLineBreakIndex !== -1 && doubleLineBreakIndex < content.length / 3) {
-          // 如果前1/3包含 \n\n，可能是思考内容和结论内容
-          const thinkingContent = content.substring(0, doubleLineBreakIndex).trim();
-          const conclusionContent = content.substring(doubleLineBreakIndex + 2).trim();
-          console.log(`消息 ${index}: 使用 \\n\\n 分隔，思考长度: ${thinkingContent.length}, 结论长度: ${conclusionContent.length}`);
-          addCombinedMessage(thinkingContent, conclusionContent);
-        } else {
-          // 普通消息，直接显示
-          addMessage(msg.role, content);
-        }
-      }
-    } else {
-      // 其他类型的消息
-      addMessage(msg.role, msg.content);
-    }
-  });
+  currentSession.conversationHistory.forEach(restoreHistoryMessage);
+  await restoreGeneratedFilesForSession(currentSession.sessionId, currentSession.conversationHistory);
   
   console.log('✅ 对话历史恢复完成');
   loadSessionList();
@@ -6654,32 +7166,8 @@ async function loadSession(sessionId) {
       currentSession = sessionId;
       elements.chatMessages.innerHTML = '';
       // 使用相同的逻辑恢复对话历史
-      currentSession.conversationHistory.forEach((msg, index) => {
-        if (msg.role === 'user') {
-          addMessage(msg.role, msg.content);
-        } else if (msg.role === 'assistant') {
-          const content = msg.content || '';
-          const separator = '==JSON==';
-          const separatorIndex = content.indexOf(separator);
-          
-          if (separatorIndex !== -1) {
-            const thinkingContent = content.substring(0, separatorIndex).trim();
-            const conclusionContent = content.substring(separatorIndex + separator.length).trim();
-            addCombinedMessage(thinkingContent, conclusionContent);
-          } else {
-            const doubleLineBreakIndex = content.indexOf('\n\n');
-            if (doubleLineBreakIndex !== -1 && doubleLineBreakIndex < content.length / 3) {
-              const thinkingContent = content.substring(0, doubleLineBreakIndex).trim();
-              const conclusionContent = content.substring(doubleLineBreakIndex + 2).trim();
-              addCombinedMessage(thinkingContent, conclusionContent);
-            } else {
-              addMessage(msg.role, content);
-            }
-          }
-        } else {
-          addMessage(msg.role, msg.content);
-        }
-      });
+      currentSession.conversationHistory.forEach(restoreHistoryMessage);
+      restoreGeneratedFilesForSession(currentSession.sessionId, currentSession.conversationHistory).catch(() => {});
       loadSessionList();
     }
   }

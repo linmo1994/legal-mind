@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind（MCP）</title>
-  <link rel="stylesheet" href="mcp_client.css">
+  <link rel="stylesheet" href="mcp_client.css?v=20260904rbac">
   <script>
     // 检测file://协议并提示
     if (window.location.protocol === 'file:') {
@@ -35,6 +35,12 @@
         </svg>
       </button>
       <h1 class="header-title">⚖️ LegalMind 智能体</h1>
+      <div class="header-case-bar" title="当前办案上下文">
+        <label for="activeCaseSelect">当前案件</label>
+        <select id="activeCaseSelect">
+          <option value="">请选择案件…</option>
+        </select>
+      </div>
     </header>
 
     <div class="main-content">
@@ -130,7 +136,8 @@
     </div>
   </div>
 
-  <script src="mcp_client.js?v=20260115"></script>
+  <script src="auth.js"></script>
+  <script src="mcp_client.js?v=20260904rbac"></script>
 </body>
 </html>
 

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>案件管理 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .admin-table th, .admin-table td { border:1px solid #e5e7eb; padding:8px; text-align:left; font-size:13px; }
+    .case-panel { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; }
+    .panel { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:14px; }
+    @media (max-width:800px){ .case-panel { grid-template-columns:1fr; } }
+    .form-grid label { display:block; margin:8px 0 4px; font-size:13px; }
+    .form-grid input, .form-grid select { width:100%; padding:8px; box-sizing:border-box; }
+  </style>
+</head>
+<body class="admin-body" data-admin-page="cases">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>案件管理</h1>
+    <p class="muted">行政主管 / 主任可创建案件并分案（指定合伙人、主办律师或助理）。</p>
+    <p id="status" class="muted"></p>
+    <div class="case-panel">
+      <div class="panel">
+        <h3>案件列表</h3>
+        <button type="button" class="btn-primary" id="btnNew">新建案件</button>
+        <table class="admin-table" style="width:100%;margin-top:10px;border-collapse:collapse;">
+          <thead><tr><th>案号</th><th>标题</th><th>状态</th></tr></thead>
+          <tbody id="caseTb"></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h3>分案成员 <span id="caseTitle" class="muted"></span></h3>
+        <div id="memberBox" class="muted">请选择左侧案件</div>
+        <div id="assignForm" class="form-grid" hidden>
+          <label>用户</label><select id="m_user"></select>
+          <label>案级角色</label>
+          <select id="m_role">
+            <option value="partner">合伙人</option>
+            <option value="lead_lawyer">主办律师</option>
+            <option value="assistant">助理</option>
+          </select>
+          <button type="button" class="btn-primary" id="btnAssign" style="margin-top:10px;">加入案件</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    let base = "", selectedId = null, users = [];
+    async function api(path, opts) {
+      const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
+      const data = await resp.json().catch(function(){return {};});
+      if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      return data;
+    }
+    async function loadCases() {
+      const data = await api("/api/admin/cases");
+      const tb = document.getElementById("caseTb");
+      tb.innerHTML = "";
+      (data.cases || []).forEach(function (c) {
+        const tr = document.createElement("tr");
+        tr.style.cursor = "pointer";
+        tr.innerHTML = "<td>" + AdminUI.esc(c.case_no) + "</td><td>" + AdminUI.esc(c.title) + "</td><td>" + AdminUI.esc(c.status) + "</td>";
+        tr.onclick = function () { selectCase(c); };
+        tb.appendChild(tr);
+      });
+    }
+    async function selectCase(c) {
+      selectedId = c.id;
+      document.getElementById("caseTitle").textContent = " · " + c.case_no;
+      document.getElementById("assignForm").hidden = false;
+      const detail = await api("/api/admin/cases/" + c.id);
+      const box = document.getElementById("memberBox");
+      const members = detail.members || [];
+      if (!members.length) box.innerHTML = "<p class='muted'>暂无成员</p>";
+      else {
+        box.innerHTML = "<ul>" + members.map(function (m) {
+          return "<li>" + AdminUI.esc(m.display_name || m.username) + " · " + AdminUI.esc(m.role_name) +
+            ' <button type="button" data-uid="' + m.user_id + '">移除</button></li>';
+        }).join("") + "</ul>";
+        box.querySelectorAll("button").forEach(function (btn) {
+          btn.onclick = async function () {
+            try {
+              await api("/api/admin/cases/" + selectedId + "/members/" + btn.getAttribute("data-uid"), { method: "DELETE" });
+              selectCase(c);
+              AdminUI.toast("已移除", true);
+            } catch (e) { AdminUI.toast(e.message, false); }
+          };
+        });
+      }
+    }
+    document.getElementById("btnNew").onclick = function () {
+      AdminUI.openDrawer({
+        title: "新建案件",
+        body: '<div class="form-grid"><label>案号</label><input id="c_no"><label>标题</label><input id="c_title"></div>',
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button><button type="button" class="btn-primary" id="c_save">创建</button>',
+        onReady: function () {
+          document.getElementById("c_save").onclick = async function () {
+            try {
+              await api("/api/admin/cases", { method: "POST", body: JSON.stringify({
+                case_no: document.getElementById("c_no").value.trim(),
+                title: document.getElementById("c_title").value.trim()
+              })});
+              AdminUI.closeDrawer();
+              AdminUI.toast("已创建", true);
+              loadCases();
+            } catch (e) { AdminUI.toast(e.message, false); }
+          };
+        }
+      });
+    };
+    document.getElementById("btnAssign").onclick = async function () {
+      if (!selectedId) return;
+      try {
+        await api("/api/admin/cases/" + selectedId + "/members", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: parseInt(document.getElementById("m_user").value, 10),
+            role_code: document.getElementById("m_role").value
+          })
+        });
+        AdminUI.toast("已分案", true);
+        const cases = await api("/api/admin/cases");
+        const c = (cases.cases || []).find(function (x) { return x.id === selectedId; });
+        if (c) selectCase(c);
+      } catch (e) { AdminUI.toast(e.message, false); }
+    };
+    (async function () {
+      if (!LegalMindAuth.requireLogin()) return;
+      base = await LegalMindAuth.mcpBase();
+      try {
+        await loadCases();
+        const udata = await api("/api/admin/users");
+        users = udata.users || [];
+        const sel = document.getElementById("m_user");
+        sel.innerHTML = users.filter(function (u) {
+          const roles = u.roles || [];
+          return roles.indexOf("director") < 0 && roles.indexOf("admin_officer") < 0;
+        }).map(function (u) {
+          return '<option value="' + u.id + '">' + AdminUI.esc(u.display_name || u.username) + "</option>";
+        }).join("") || '<option value="">无可分案用户（请先在用户管理中创建律师账号）</option>';
+      } catch (e) {
+        document.getElementById("status").textContent = e.message;
+        document.getElementById("status").className = "status-err";
+      }
+    })();
+  </script>
+</body>
+</html>

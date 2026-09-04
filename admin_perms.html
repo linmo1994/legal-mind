@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>功能管理 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .admin-table th, .admin-table td { border:1px solid #e5e7eb; padding:8px; text-align:left; font-size:13px; }
+    .admin-table input { width:100%; box-sizing:border-box; padding:6px; }
+  </style>
+</head>
+<body class="admin-body" data-admin-page="perms">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>功能管理</h1>
+    <p class="muted">权限码 code 只读；可改显示名称与分组。</p>
+    <p id="status" class="muted"></p>
+    <table class="admin-table" style="width:100%;border-collapse:collapse;background:#fff;">
+      <thead><tr><th>code</th><th>名称</th><th>类型</th><th>分组</th><th></th></tr></thead>
+      <tbody id="tb"></tbody>
+    </table>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    let base = "";
+    async function api(path, opts) {
+      const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
+      const data = await resp.json().catch(function(){return {};});
+      if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      return data;
+    }
+    async function load() {
+      const data = await api("/api/admin/permissions");
+      const tb = document.getElementById("tb");
+      tb.innerHTML = "";
+      (data.permissions || []).forEach(function (p) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td><code>" + AdminUI.esc(p.code) + "</code></td>" +
+          '<td><input data-f="name" value="' + AdminUI.esc(p.name) + '"></td>' +
+          "<td>" + AdminUI.esc(p.kind) + "</td>" +
+          '<td><input data-f="group_name" value="' + AdminUI.esc(p.group_name || "") + '"></td><td></td>';
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "btn-primary"; btn.textContent = "保存";
+        btn.onclick = async function () {
+          try {
+            await api("/api/admin/permissions/" + encodeURIComponent(p.code), {
+              method: "PUT",
+              body: JSON.stringify({
+                name: tr.querySelector('[data-f=name]').value,
+                group_name: tr.querySelector('[data-f=group_name]').value
+              })
+            });
+            AdminUI.toast("已保存", true);
+          } catch (e) { AdminUI.toast(e.message, false); }
+        };
+        tr.lastChild.appendChild(btn);
+        tb.appendChild(tr);
+      });
+    }
+    (async function () {
+      if (!LegalMindAuth.requireLogin()) return;
+      base = await LegalMindAuth.mcpBase();
+      try { await load(); } catch (e) {
+        document.getElementById("status").textContent = e.message;
+        document.getElementById("status").className = "status-err";
+      }
+    })();
+  </script>
+</body>
+</html>

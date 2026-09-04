@@ -3,400 +3,68 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>向量化文档 - LegalMind</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Arial', sans-serif;
-      background: #f5f6fa;
-      color: #222;
-      padding: 20px;
-    }
-
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      background: white;
-      border-radius: 12px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      padding: 30px;
-    }
-
-    h1 {
-      color: #2d5be3;
-      margin-bottom: 30px;
-      font-size: 2rem;
-    }
-
-    .section {
-      margin-bottom: 30px;
-      padding: 20px;
-      background: #f9fafb;
-      border-radius: 8px;
-    }
-
-    .section h2 {
-      color: #333;
-      margin-bottom: 15px;
-      font-size: 1.3rem;
-    }
-
-    .form-group {
-      margin-bottom: 20px;
-    }
-
-    label {
-      display: block;
-      margin-bottom: 8px;
-      color: #555;
-      font-weight: 500;
-    }
-
-    input[type="text"],
-    textarea {
-      width: 100%;
-      padding: 12px;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      font-size: 14px;
-      font-family: inherit;
-    }
-
-    textarea {
-      min-height: 200px;
-      resize: vertical;
-    }
-
-
-    .btn {
-      padding: 12px 24px;
-      border: none;
-      border-radius: 6px;
-      font-size: 16px;
-      cursor: pointer;
-      transition: all 0.3s;
-      font-weight: 500;
-    }
-
-    .btn-primary {
-      background: #2d5be3;
-      color: white;
-    }
-
-    .btn-primary:hover {
-      background: #1e4bc7;
-    }
-
-    .btn-primary:disabled {
-      background: #ccc;
-      cursor: not-allowed;
-    }
-
-    .btn-secondary {
-      background: #6c757d;
-      color: white;
-    }
-
-    .btn-secondary:hover {
-      background: #5a6268;
-    }
-
-    .status {
-      padding: 12px;
-      border-radius: 6px;
-      margin-top: 15px;
-    }
-
-    .status.success {
-      background: #d4edda;
-      color: #155724;
-      border: 1px solid #c3e6cb;
-    }
-
-    .status.error {
-      background: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
-    }
-
-    .status.info {
-      background: #d1ecf1;
-      color: #0c5460;
-      border: 1px solid #bee5eb;
-    }
-
-    .result-area {
-      margin-top: 20px;
-      padding: 15px;
-      background: white;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      min-height: 200px;
-      max-height: 800px;
-      overflow-y: auto;
-    }
-
-    .search-results-list {
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-    }
-
-    .results-summary {
-      padding: 12px 16px;
-      background: #e3f2fd;
-      border-left: 4px solid #2196f3;
-      border-radius: 6px;
-      color: #1976d2;
-      font-weight: 500;
-      font-size: 14px;
-      margin-bottom: 10px;
-    }
-
-    .document-group {
-      background: #ffffff;
-      border: 1px solid #e0e0e0;
-      border-radius: 8px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-      overflow: hidden;
-      transition: box-shadow 0.2s;
-    }
-
-    .document-group:hover {
-      box-shadow: 0 4px 8px rgba(45,91,227,0.1);
-    }
-
-    .document-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 16px 20px;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-    }
-
-    .document-title {
-      margin: 0;
-      font-size: 18px;
-      font-weight: 600;
-      flex: 1;
-    }
-
-    .document-chunks-count {
-      background: rgba(255,255,255,0.2);
-      padding: 4px 12px;
-      border-radius: 12px;
-      font-size: 13px;
-      font-weight: 500;
-    }
-
-    .document-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 15px;
-      padding: 12px 20px;
-      background: #f8f9fa;
-      border-bottom: 1px solid #e0e0e0;
-      font-size: 13px;
-    }
-
-    .meta-item {
-      color: #666;
-    }
-
-    .meta-item strong {
-      color: #333;
-      font-weight: 600;
-    }
-
-    .chunks-list {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      padding: 16px 20px;
-    }
-
-    .chunk-item {
-      background: #f8f9fa;
-      border: 1px solid #e0e0e0;
-      border-left: 3px solid #2d5be3;
-      border-radius: 6px;
-      padding: 14px;
-      transition: background 0.2s;
-    }
-
-    .chunk-item:hover {
-      background: #f0f4ff;
-    }
-
-    .chunk-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 10px;
-    }
-
-    .chunk-number {
-      font-weight: 600;
-      color: #2d5be3;
-      font-size: 14px;
-    }
-
-    .similarity-badge {
-      background: #2d5be3;
-      color: white;
-      padding: 4px 12px;
-      border-radius: 12px;
-      font-size: 12px;
-      font-weight: 500;
-    }
-
-    .chunk-meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-bottom: 10px;
-      font-size: 12px;
-      color: #666;
-    }
-
-    .chunk-content {
-      margin-top: 10px;
-    }
-
-    .content-text {
-      background: #ffffff;
-      padding: 12px;
-      border-radius: 4px;
-      color: #333;
-      font-size: 14px;
-      line-height: 1.8;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      border: 1px solid #e0e0e0;
-    }
-
-    .loading {
-      display: inline-block;
-      width: 16px;
-      height: 16px;
-      border: 2px solid #f3f3f3;
-      border-top: 2px solid #2d5be3;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      margin-right: 8px;
-    }
-
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-
-    .db-info {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 15px;
-      margin-top: 15px;
-    }
-
-    .info-card {
-      padding: 15px;
-      background: white;
-      border-radius: 6px;
-      border: 1px solid #ddd;
-    }
-
-    .info-card h3 {
-      color: #2d5be3;
-      font-size: 14px;
-      margin-bottom: 8px;
-    }
-
-    .info-card .value {
-      font-size: 24px;
-      font-weight: bold;
-      color: #333;
-    }
-  </style>
+  <title>文档向量化 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <link rel="stylesheet" href="vectorize.css">
 </head>
-<body>
-  <div class="container">
-    <h1>📚 向量化文档管理</h1>
+<body class="admin-body" data-admin-page="vectorize">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>文档向量化</h1>
+    <p class="muted">将法律文书写入向量库，供法规与类案检索使用。</p>
 
-    <!-- 数据库信息 -->
-    <div class="section">
-      <h2>📊 向量数据库信息</h2>
-      <button class="btn btn-secondary" onclick="loadDbInfo()">刷新信息</button>
+    <div class="vz-section">
+      <h2>向量数据库信息</h2>
+      <button type="button" class="btn btn-secondary" onclick="loadDbInfo()">刷新信息</button>
       <div id="dbInfo" class="db-info"></div>
     </div>
 
-    <!-- 向量化文档 -->
-    <div class="section">
-      <h2>📄 向量化文档</h2>
-      
-      <div class="form-group">
-        <label>文档ID（唯一标识）:</label>
+    <div class="vz-section">
+      <h2>写入文档</h2>
+      <div class="vz-form-group">
+        <label for="documentId">文档编号（唯一标识）</label>
         <input type="text" id="documentId" placeholder="例如: doc_20241224_001">
       </div>
-
-      <div class="form-group">
-        <label>文档标题（可选）:</label>
+      <div class="vz-form-group">
+        <label for="documentTitle">文档标题（可选）</label>
         <input type="text" id="documentTitle" placeholder="例如: 劳动合同模板">
       </div>
-
-      <div class="form-group">
-        <label>文档内容:</label>
-        <textarea id="documentText" placeholder="在此输入或粘贴文档内容..."></textarea>
+      <div class="vz-form-group">
+        <label for="documentText">文档正文</label>
+        <textarea id="documentText" placeholder="在此输入或粘贴文书内容…"></textarea>
       </div>
-
-      <button class="btn btn-primary" onclick="vectorizeDocument()" id="vectorizeBtn">
-        开始向量化
-      </button>
+      <button type="button" class="btn btn-primary" onclick="vectorizeDocument()" id="vectorizeBtn">开始向量化</button>
       <div id="vectorizeStatus"></div>
     </div>
 
-    <!-- 搜索文档 -->
-    <div class="section">
-      <h2>🔍 搜索相似文档</h2>
-      
-      <div class="form-group">
-        <label>搜索查询:</label>
-        <input type="text" id="searchQuery" placeholder="输入要搜索的内容...">
+    <div class="vz-section">
+      <h2>检索相似内容</h2>
+      <div class="vz-form-group">
+        <label for="searchQuery">检索内容</label>
+        <input type="text" id="searchQuery" placeholder="输入要检索的要点或条文…">
       </div>
-
-      <div class="form-group">
-        <label>返回结果数量:</label>
-        <input type="number" id="searchResultsCount" value="10" min="1" max="50" style="width: 100px;">
+      <div class="vz-form-group">
+        <label for="searchResultsCount">返回条数</label>
+        <input type="number" id="searchResultsCount" class="vz-input-narrow" value="10" min="1" max="50">
       </div>
-
-      <button class="btn btn-primary" onclick="searchDocuments()" id="searchBtn">
-        搜索
-      </button>
+      <button type="button" class="btn btn-primary" onclick="searchDocuments()" id="searchBtn">检索</button>
       <div id="searchStatus"></div>
       <div id="searchResultsArea" class="result-area"></div>
     </div>
 
-    <!-- 删除文档 -->
-    <div class="section">
-      <h2>🗑️ 删除文档</h2>
-      
-      <div class="form-group">
-        <label>文档ID:</label>
-        <input type="text" id="deleteDocumentId" placeholder="输入要删除的文档ID">
+    <div class="vz-section">
+      <h2>删除文档</h2>
+      <div class="vz-form-group">
+        <label for="deleteDocumentId">文档编号</label>
+        <input type="text" id="deleteDocumentId" placeholder="输入要删除的文档编号">
       </div>
-
-      <button class="btn btn-secondary" onclick="deleteDocument()" id="deleteBtn">
-        删除文档
-      </button>
+      <button type="button" class="btn btn-danger" onclick="deleteDocument()" id="deleteBtn">删除文档</button>
       <div id="deleteStatus"></div>
     </div>
   </div>
-
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
   <script>
     let MCP_SERVER_URL = null;
     let requestIdCounter = 0;
@@ -505,7 +173,7 @@
           </div>
           <div class="info-card">
             <h3>存储路径</h3>
-            <div class="value" style="font-size: 12px;">${info.persist_directory || 'N/A'}</div>
+            <div class="value value-sm">${info.persist_directory || 'N/A'}</div>
           </div>
         `;
       } catch (error) {
@@ -575,13 +243,13 @@
       const nResults = parseInt(document.getElementById('searchResultsCount').value) || 5;
 
       if (!query) {
-        statusDiv.innerHTML = '<div class="status error">请输入搜索查询</div>';
+        statusDiv.innerHTML = '<div class="status error">请输入检索内容</div>';
         return;
       }
 
       btn.disabled = true;
-      btn.innerHTML = '<span class="loading"></span> 搜索中...';
-      statusDiv.innerHTML = '<div class="status info">正在搜索...</div>';
+      btn.innerHTML = '<span class="loading"></span> 检索中...';
+      statusDiv.innerHTML = '<div class="status info">正在检索...</div>';
       resultsDiv.innerHTML = '';
 
       try {
@@ -616,11 +284,7 @@
             let similarity;
             if (result.distance !== null && result.distance !== undefined) {
               const distance = result.distance;
-              
-              // #region agent log
-              fetch('http://127.0.0.1:7242/ingest/0859865c-64b0-4653-a1d6-ebd1db64b092',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorize.html:621',message:'计算相似度',data:{distance,isNegative:distance<0,isGreaterThan2:distance>2},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-              // #endregion
-              
+
               // ChromaDB默认使用L2距离（欧氏距离），向量已归一化
               // 对于归一化向量的L2距离，范围是0-2
               // L2_distance^2 = 2 - 2*cosine_similarity
@@ -644,10 +308,6 @@
                 const normalizedSimilarity = 1 - normalizedDistance;
                 similarity = (Math.max(0, normalizedSimilarity) * 100).toFixed(1) + '%';
               }
-              
-              // #region agent log
-              fetch('http://127.0.0.1:7242/ingest/0859865c-64b0-4653-a1d6-ebd1db64b092',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'vectorize.html:640',message:'相似度计算结果',data:{distance,similarity},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-              // #endregion
             } else {
               similarity = 'N/A';
             }
@@ -685,11 +345,11 @@
             html += `
               <div class="document-group">
                 <div class="document-header">
-                  <h3 class="document-title">📄 ${escapeHtml(doc.title)}</h3>
+                  <h3 class="document-title">${escapeHtml(doc.title)}</h3>
                   <span class="document-chunks-count">${doc.chunks.length} 个相关片段</span>
                 </div>
                 <div class="document-meta">
-                  <span class="meta-item">📋 文档ID: <strong>${escapeHtml(doc.documentId)}</strong></span>
+                  <span class="meta-item">文档编号：<strong>${escapeHtml(doc.documentId)}</strong></span>
                 </div>
                 
                 <div class="chunks-list">
@@ -712,8 +372,8 @@
                     <span class="similarity-badge">相似度: ${chunk.similarity}</span>
                   </div>
                   <div class="chunk-meta">
-                    <span class="meta-item">📍 位置: 第 ${chunk.chunkIndex + 1}/${chunk.totalChunks} 块</span>
-                    <span class="meta-item">🆔 块ID: ${escapeHtml(chunk.chunkId)}</span>
+                    <span class="meta-item">位置：第 ${chunk.chunkIndex + 1}/${chunk.totalChunks} 块</span>
+                    <span class="meta-item">块编号：${escapeHtml(chunk.chunkId)}</span>
                   </div>
                   <div class="chunk-content">
                     <div class="content-text">${escapeHtml(chunk.content)}</div>
@@ -736,7 +396,7 @@
         statusDiv.innerHTML = `<div class="status error">❌ 错误: ${error.message}</div>`;
       } finally {
         btn.disabled = false;
-        btn.innerHTML = '搜索';
+        btn.innerHTML = '检索';
       }
     }
 

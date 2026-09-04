@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP 配置 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body class="admin-body" data-admin-page="mcp">
+  <div class="admin-wrap admin-wrap--wide">
+    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
+    <div id="adminSubnav"></div>
+    <h1>MCP 配置</h1>
+    <p class="muted" style="margin-bottom:24px">分别管理 MCP 服务连接与大模型参数。当前启用的条目会写入运行配置；改端口后需重启 MCP 服务。</p>
+    <div class="list-toolbar">
+      <div class="filter-tabs" id="filterTabs">
+        <button type="button" class="active" data-filter="all">全部</button>
+        <button type="button" data-filter="mcp">服务连接</button>
+        <button type="button" data-filter="llm">大模型</button>
+      </div>
+      <button type="button" class="btn-primary" id="btnNew">新建</button>
+    </div>
+    <p id="emptyHint" class="muted" hidden>暂无配置。</p>
+    <table class="data-table" id="profileTable">
+      <thead>
+        <tr>
+          <th>类型</th>
+          <th>名称</th>
+          <th>摘要</th>
+          <th>状态</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="profileBody"></tbody>
+    </table>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_nav.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    const UI = window.AdminUI;
+    let items = [];
+    let filter = "all";
+
+    function kindLabel(kind) {
+      return kind === "mcp" ? "服务连接" : "大模型";
+    }
+
+    function summary(item) {
+      if (item.kind === "mcp") return (item.host || "") + ":" + (item.port || "");
+      return (item.model || "") + " · " + (item.api_url || "");
+    }
+
+    function allItems(data) {
+      return (data.mcp_profiles || []).concat(data.llm_profiles || []);
+    }
+
+    function visibleItems() {
+      return items.filter(function (it) { return filter === "all" || it.kind === filter; });
+    }
+
+    function mcpForm(item, existing) {
+      const v = item || {};
+      return '<form class="admin-form" id="pForm">' +
+        '<label>名称</label><input id="pName" required value="' + UI.esc(v.name || "") + '">' +
+        (existing ? "" : '<label>标识</label><input id="pId" placeholder="可选，英文数字" value="' + UI.esc(v.id || "") + '">') +
+        '<label>MCP 服务地址</label><input id="pHost" required value="' + UI.esc(v.host || "127.0.0.1") + '">' +
+        '<label>MCP 端口</label><input id="pPort" type="number" required value="' + UI.esc(v.port || 8001) + '">' +
+        '<label class="checkbox-row"><input id="pActive" type="checkbox"' + (v.active ? " checked" : "") + "> 设为当前使用</label></form>";
+    }
+
+    function llmForm(item, existing) {
+      const v = item || {};
+      return '<form class="admin-form" id="pForm">' +
+        '<label>名称</label><input id="pName" required value="' + UI.esc(v.name || "") + '">' +
+        (existing ? "" : '<label>标识</label><input id="pId" placeholder="可选" value="' + UI.esc(v.id || "") + '">') +
+        '<label>接口地址</label><input id="pUrl" required value="' + UI.esc(v.api_url || "") + '">' +
+        '<label>模型名称</label><input id="pModel" required value="' + UI.esc(v.model || "") + '">' +
+        '<label>请求超时（毫秒）</label><input id="pTimeout" type="number" value="' + UI.esc(v.timeout ?? 600000) + '">' +
+        '<label>失败重试次数</label><input id="pRetries" type="number" value="' + UI.esc(v.max_retries ?? 3) + '">' +
+        '<label>随机性（Temperature）</label><input id="pTemp" type="number" step="0.1" value="' + UI.esc(v.temperature ?? 0) + '">' +
+        '<label>最大生成长度</label><input id="pTokens" type="number" value="' + UI.esc(v.max_tokens ?? 2048) + '">' +
+        '<label>接口密钥（填写新值才会更新）</label><input id="pKey" type="password" placeholder="' + (v.api_key_set ? "已配置，留空不修改" : "未配置") + '">' +
+        '<label class="checkbox-row"><input id="pActive" type="checkbox"' + (v.active ? " checked" : "") + "> 设为当前使用</label></form>";
+    }
+
+    function readMcp() {
+      const payload = {
+        kind: "mcp",
+        name: document.getElementById("pName").value.trim(),
+        host: document.getElementById("pHost").value.trim(),
+        port: Number(document.getElementById("pPort").value),
+        active: document.getElementById("pActive").checked
+      };
+      const idEl = document.getElementById("pId");
+      if (idEl && idEl.value.trim()) payload.id = idEl.value.trim();
+      return payload;
+    }
+
+    function readLlm() {
+      const payload = {
+        kind: "llm",
+        name: document.getElementById("pName").value.trim(),
+        api_url: document.getElementById("pUrl").value.trim(),
+        model: document.getElementById("pModel").value.trim(),
+        timeout: Number(document.getElementById("pTimeout").value),
+        max_retries: Number(document.getElementById("pRetries").value),
+        temperature: Number(document.getElementById("pTemp").value),
+        max_tokens: Number(document.getElementById("pTokens").value),
+        active: document.getElementById("pActive").checked
+      };
+      const idEl = document.getElementById("pId");
+      if (idEl && idEl.value.trim()) payload.id = idEl.value.trim();
+      const key = document.getElementById("pKey").value;
+      if (key) payload.api_key = key;
+      return payload;
+    }
+
+    function openView(item) {
+      let rows = "<dt>类型</dt><dd>" + UI.esc(kindLabel(item.kind)) + "</dd>" +
+        "<dt>标识</dt><dd><code>" + UI.esc(item.id) + "</code></dd>" +
+        "<dt>名称</dt><dd>" + UI.esc(item.name) + "</dd>";
+      if (item.kind === "mcp") {
+        rows += "<dt>地址</dt><dd>" + UI.esc(item.host) + "</dd><dt>端口</dt><dd>" + UI.esc(item.port) + "</dd>";
+      } else {
+        rows += "<dt>接口</dt><dd>" + UI.esc(item.api_url) + "</dd>" +
+          "<dt>模型</dt><dd>" + UI.esc(item.model) + "</dd>" +
+          "<dt>超时</dt><dd>" + UI.esc(item.timeout) + " 毫秒</dd>" +
+          "<dt>重试</dt><dd>" + UI.esc(item.max_retries) + "</dd>" +
+          "<dt>随机性</dt><dd>" + UI.esc(item.temperature) + "</dd>" +
+          "<dt>最大长度</dt><dd>" + UI.esc(item.max_tokens) + "</dd>" +
+          "<dt>密钥</dt><dd>" + (item.api_key_set ? "已配置" : "未配置") + "</dd>";
+      }
+      rows += "<dt>状态</dt><dd>" + (item.active ? "当前使用" : "备用") + "</dd>";
+      UI.openDrawer({
+        title: item.name || item.id,
+        body: '<dl class="detail-list">' + rows + "</dl>",
+        footer: '<button type="button" class="btn-ghost" id="btnEdit">修改</button>' +
+          '<button type="button" class="btn-danger-outline" id="btnDel">删除</button>'
+      });
+      document.getElementById("btnEdit").onclick = function () { openEdit(item, true); };
+      document.getElementById("btnDel").onclick = function () { removeItem(item); };
+    }
+
+    function openEdit(item, existing) {
+      const kind = item ? item.kind : (filter === "llm" ? "llm" : "mcp");
+      UI.openDrawer({
+        title: (existing ? "修改" : "新建") + kindLabel(kind),
+        body: kind === "mcp" ? mcpForm(item, existing) : llmForm(item, existing),
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
+          '<button type="button" class="btn-primary" id="btnSave">保存</button>',
+        onReady: function () {
+          document.getElementById("btnSave").onclick = async function () {
+            const payload = kind === "mcp" ? readMcp() : readLlm();
+            const base = await UI.apiBase();
+            const url = existing
+              ? base + "/api/admin/profiles/" + kind + "/" + encodeURIComponent(item.id)
+              : base + "/api/admin/profiles";
+            const resp = await fetch(url, {
+              method: existing ? "PUT" : "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            const data = await resp.json().catch(function () { return {}; });
+            if (!resp.ok) {
+              UI.toast(data.error || "保存失败", false);
+              return;
+            }
+            UI.toast(payload.active ? "已保存并设为当前使用" : "已保存");
+            UI.closeDrawer();
+            loadList();
+          };
+        }
+      });
+    }
+
+    async function removeItem(item) {
+      const ok = await UI.confirm({
+        title: "删除配置",
+        message: "确定删除「" + (item.name || item.id) + "」？至少需保留一条" + kindLabel(item.kind) + "。",
+        danger: true,
+        okText: "删除"
+      });
+      if (!ok) return;
+      const base = await UI.apiBase();
+      const resp = await fetch(base + "/api/admin/profiles/" + item.kind + "/" + encodeURIComponent(item.id), { method: "DELETE" });
+      const data = await resp.json().catch(function () { return {}; });
+      if (!resp.ok) {
+        UI.toast(data.error || "删除失败", false);
+        return;
+      }
+      UI.toast("已删除");
+      UI.closeDrawer();
+      loadList();
+    }
+
+    function render() {
+      const rows = visibleItems();
+      const tbody = document.getElementById("profileBody");
+      const empty = document.getElementById("emptyHint");
+      const table = document.getElementById("profileTable");
+      tbody.innerHTML = "";
+      empty.hidden = rows.length > 0;
+      table.hidden = rows.length === 0;
+      rows.forEach(function (item) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + UI.esc(kindLabel(item.kind)) + "</td><td>" + UI.esc(item.name || item.id) +
+          "</td><td>" + UI.esc(summary(item)) + '</td><td><span class="badge' + (item.active ? " badge-on" : "") + '">' +
+          (item.active ? "当前" : "备用") + '</span></td><td><div class="row-actions">' +
+          '<button type="button" class="btn-ghost" data-act="view">查看</button>' +
+          '<button type="button" class="btn-ghost" data-act="edit">修改</button>' +
+          '<button type="button" class="btn-danger-outline" data-act="del">删除</button></div></td>';
+        tr.addEventListener("click", function (e) {
+          const act = e.target.getAttribute("data-act");
+          if (act === "edit") { e.stopPropagation(); openEdit(item, true); return; }
+          if (act === "del") { e.stopPropagation(); removeItem(item); return; }
+          if (act === "view") e.stopPropagation();
+          openView(item);
+        });
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadList() {
+      const base = await UI.apiBase();
+      const data = await (await fetch(base + "/api/admin/profiles")).json();
+      items = allItems(data);
+      render();
+    }
+
+    document.getElementById("filterTabs").onclick = function (e) {
+      const btn = e.target.closest("button[data-filter]");
+      if (!btn) return;
+      filter = btn.getAttribute("data-filter");
+      Array.prototype.forEach.call(document.querySelectorAll("#filterTabs button"), function (b) {
+        b.classList.toggle("active", b === btn);
+      });
+      render();
+    };
+
+    document.getElementById("btnNew").onclick = function () {
+      const kind = filter === "all" ? "mcp" : filter;
+      openEdit({ kind: kind, active: false }, false);
+    };
+
+    loadList().catch(function (err) { UI.toast(String(err), false); });
+  </script>
+</body>
+</html>
