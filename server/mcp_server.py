@@ -385,6 +385,17 @@ class MCPServer:
             print(f"[MCP Server] RBAC 服务初始化成功: {rbac_db}")
         except Exception as e:
             print(f"[MCP Server] 警告：RBAC 服务初始化失败: {e}")
+
+        # 知识库（SQLite）；HTTP API 在 file_service 就绪后挂载
+        self.kb_store = None
+        self.kb_api = None
+        try:
+            from kb_store import KbStore
+            self.kb_store = KbStore("./kb.db")
+            self.kb_store.ensure_schema()
+            print("[MCP Server] 知识库 KbStore 初始化成功: ./kb.db")
+        except Exception as e:
+            print(f"[MCP Server] 警告：知识库 KbStore 初始化失败: {e}")
         
         # 初始化向量化服务（使用超时机制，避免长时间阻塞）
         self.vector_service = None
@@ -451,6 +462,23 @@ class MCPServer:
         except Exception as e:
             print(f"[MCP Server] 警告：文件服务初始化失败: {e}")
             self.file_service = None
+
+        # 知识库 HTTP API（依赖 auth/rbac + file/vector）
+        if self.kb_store and self.auth_service and self.rbac_service:
+            try:
+                from http_kb_api import KbHttpApi
+                self.kb_api = KbHttpApi(
+                    self.kb_store,
+                    self.auth_service,
+                    self.rbac_service,
+                    file_service=self.file_service,
+                    vector_service=self.vector_service,
+                )
+                print("[MCP Server] 知识库 HTTP API 初始化成功")
+            except Exception as e:
+                print(f"[MCP Server] 警告：知识库 HTTP API 初始化失败: {e}")
+                self.kb_api = None
+
         self.resources = self._init_resources()
         self.prompts = self._init_prompts()
     
@@ -1631,7 +1659,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         """处理CORS预检请求"""
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.send_header('Access-Control-Allow-Private-Network', 'true')
         self.send_header('Access-Control-Max-Age', '86400')
@@ -1672,6 +1700,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             return
         if path == '/api/admin/clients' or path.startswith('/api/admin/clients/'):
             self._handle_rbac_api('POST')
+            return
+        if path.startswith('/api/admin/kb'):
+            self._handle_kb_api('POST')
             return
         if path == '/api/skills':
             self._handle_skills_api('POST')
@@ -2695,6 +2726,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self._handle_rbac_api('GET')
         elif path.startswith('/api/admin/users') or path.startswith('/api/admin/roles') or path.startswith('/api/admin/permissions') or path.startswith('/api/admin/cases') or path.startswith('/api/admin/clients'):
             self._handle_rbac_api('GET')
+        elif path.startswith('/api/admin/kb'):
+            self._handle_kb_api('GET')
         elif path.startswith('/api/sessions'):
             self._handle_session_api(path, method='GET')
         elif path.startswith('/api/files'):
@@ -2726,8 +2759,19 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self._handle_rbac_api('DELETE')
         elif path.startswith('/api/admin/clients/'):
             self._handle_rbac_api('DELETE')
+        elif path.startswith('/api/admin/kb'):
+            self._handle_kb_api('DELETE')
         elif path.startswith('/api/admin/profiles/'):
             self._handle_admin_profiles_api('DELETE')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_PATCH(self):
+        """处理 PATCH 请求（知识库元数据更新等）"""
+        path = self.path.split('?')[0]
+        if path.startswith('/api/admin/kb'):
+            self._handle_kb_api('PATCH')
         else:
             self.send_response(404)
             self.end_headers()
@@ -3491,6 +3535,77 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             import traceback
             print(f"[ERROR] rbac api: {e}\n{traceback.format_exc()}")
             self._write_json(400, {"error": "RBAC 请求失败", "detail": str(e)})
+
+    def _sync_kb_vector_service(self, api) -> None:
+        """Refresh kb_api.vector_service after async VectorService init."""
+        server = MCPHTTPHandler.server_instance
+        if not server.vector_service and getattr(server, "_vector_service_init_thread", None):
+            if not server._vector_service_init_thread.is_alive():
+                lock = getattr(server, "_vector_service_init_lock", None)
+                if lock:
+                    with lock:
+                        if server._vector_service_instance[0]:
+                            server.vector_service = server._vector_service_instance[0]
+                elif getattr(server, "_vector_service_instance", [None])[0]:
+                    server.vector_service = server._vector_service_instance[0]
+        api.vector_service = server.vector_service
+        api.file_service = server.file_service
+
+    def _handle_kb_api(self, method: str):
+        api = getattr(MCPHTTPHandler.server_instance, "kb_api", None)
+        if not api:
+            self._write_json(503, {"error": "知识库服务未初始化"})
+            return
+        try:
+            from urllib.parse import urlparse, parse_qs
+            self._sync_kb_vector_service(api)
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            qs = parse_qs(parsed.query or "")
+            authz = self.headers.get("Authorization")
+            body = {}
+            if method in ("POST", "PATCH", "PUT"):
+                body = self._read_json_body() or {}
+
+            if path == "/api/admin/kb/documents" and method == "GET":
+                doc_type = qs.get("doc_type", [""])[0]
+                limit = qs.get("limit", ["50"])[0]
+                offset = qs.get("offset", ["0"])[0]
+                self._write_json(
+                    *api.list_documents(authz, doc_type, limit=limit, offset=offset)
+                )
+                return
+            if path == "/api/admin/kb/documents" and method == "POST":
+                self._write_json(*api.create_from_file(authz, body))
+                return
+            if path == "/api/admin/kb/search" and method == "POST":
+                self._write_json(*api.search(authz, body))
+                return
+            if path.startswith("/api/admin/kb/documents/"):
+                parts = path.split("/")
+                # /api/admin/kb/documents/{id} or .../{id}/update
+                if len(parts) < 5:
+                    self._write_json(404, {"error": "未找到接口"})
+                    return
+                doc_id = parts[4]
+                if len(parts) == 6 and parts[5] == "update" and method == "POST":
+                    self._write_json(*api.patch_document(authz, doc_id, body))
+                    return
+                if len(parts) == 5 and method == "GET":
+                    self._write_json(*api.get_document(authz, doc_id))
+                    return
+                if len(parts) == 5 and method == "PATCH":
+                    self._write_json(*api.patch_document(authz, doc_id, body))
+                    return
+                if len(parts) == 5 and method == "DELETE":
+                    self._write_json(*api.delete_document(authz, doc_id))
+                    return
+
+            self._write_json(404, {"error": "未找到接口"})
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] kb api: {e}\n{traceback.format_exc()}")
+            self._write_json(400, {"error": "知识库请求失败", "detail": str(e)})
 
     def _handle_orchestrate_api(self):
         try:
