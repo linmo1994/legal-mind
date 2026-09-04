@@ -80,6 +80,9 @@ class TestHttpKbApi(unittest.TestCase):
         self.assertEqual(st, 200)
         st, listed2 = self.api.list_documents(self.authz, "law")
         self.assertEqual(listed2["items"], [])
+        st, search2 = self.api.search(self.authz, {"doc_type": "law", "query": "测试法", "n_results": 3})
+        self.assertEqual(st, 200)
+        self.assertEqual(search2["results"], [])
 
 
 if __name__ == "__main__":
