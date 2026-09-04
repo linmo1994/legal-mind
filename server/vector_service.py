@@ -241,7 +241,7 @@ class VectorService:
                 "error": str(e)
             }
     
-    def search(self, query: str, n_results: int = 5, boost_keywords: bool = True) -> List[Dict]:
+    def search(self, query: str, n_results: int = 5, boost_keywords: bool = True, where: Optional[Dict] = None) -> List[Dict]:
         """
         搜索相似文档
         
@@ -249,6 +249,7 @@ class VectorService:
             query: 查询文本
             n_results: 返回结果数量
             boost_keywords: 是否对包含查询关键词的结果进行boost（提升排名）
+            where: 可选的元数据过滤条件（传给 ChromaDB query）
             
         Returns:
             相似文档列表
@@ -334,10 +335,10 @@ class VectorService:
             # 查询数量 = 请求数量 * 2，但至少10个，最多50个
             query_n_results = max(min(n_results * 2, 50), 10) if boost_keywords else n_results
             
-            results = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=query_n_results
-            )
+            kwargs = dict(query_embeddings=[query_embedding], n_results=query_n_results)
+            if where:
+                kwargs["where"] = where
+            results = self.collection.query(**kwargs)
             
             # #region agent log
             try:
@@ -480,6 +481,41 @@ class VectorService:
                 "success": False,
                 "error": str(e)
             }
+
+    def _chroma_scalar(self, value):
+        if value is None:
+            return None
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, list):
+            return "; ".join(str(x) for x in value if x is not None)
+        return str(value)
+
+    def update_document_metadata(self, document_id: str, metadata: dict) -> dict:
+        results = self.collection.get(where={"document_id": document_id}, include=["metadatas"])
+        ids = results.get("ids") or []
+        if not ids:
+            return {"success": False, "message": f"未找到文档 {document_id}"}
+        new_metas = []
+        for old in results["metadatas"]:
+            merged = dict(old or {})
+            for k, v in (metadata or {}).items():
+                sv = self._chroma_scalar(v)
+                if sv is None:
+                    continue
+                merged[k] = sv
+            merged["document_id"] = document_id
+            new_metas.append(merged)
+        self.collection.update(ids=ids, metadatas=new_metas)
+        return {"success": True, "updated_count": len(ids)}
+
+    def count_by_doc_type(self, doc_type: str) -> int:
+        results = self.collection.get(where={"doc_type": doc_type}, include=["metadatas"])
+        ids = set()
+        for m in results.get("metadatas") or []:
+            if m and m.get("document_id"):
+                ids.add(m["document_id"])
+        return len(ids)
     
     def get_collection_info(self) -> Dict:
         """
