@@ -307,3 +307,29 @@ class RbacHttpApi:
             return gated
         self.store.remove_case_member(case_id, user_id)
         return _ok({"ok": True})
+
+    def check_orchestrate_access(
+        self, authorization: Optional[str], body: Dict[str, Any]
+    ) -> StatusPayload:
+        gated = self.require_user(authorization)
+        if gated[0] != 200:
+            return gated
+        user = gated[1]["user"]
+        case_id = body.get("case_id")
+        if case_id is None or case_id == "":
+            return _deny(400, "业务请求需要 case_id")
+        case_id = int(case_id)
+        if not self.store.get_case(case_id):
+            return _deny(404, "案件不存在")
+        if not self.rbac.require(user["id"], "cap.chat", case_id):
+            return _deny(403, "无权限：cap.chat")
+        text = (body.get("user_text") or body.get("message") or "")
+        if any(k in text for k in ("断案", "审判", "裁判分析")) and not self.rbac.require(
+            user["id"], "cap.judge", case_id
+        ):
+            return _deny(403, "无权限：cap.judge")
+        if any(k in text for k in ("起诉状", "生成文书", "起草", "判决书")) and not self.rbac.require(
+            user["id"], "cap.doc_write", case_id
+        ):
+            return _deny(403, "无权限：cap.doc_write")
+        return _ok({"user": user, "case_id": case_id})

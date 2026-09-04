@@ -3463,6 +3463,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         try:
             from http_api_extra import handle_orchestrate
             body = self._read_json_body() or {}
+            api = getattr(MCPHTTPHandler.server_instance, "rbac_api", None)
+            if api is not None:
+                status, payload = api.check_orchestrate_access(
+                    self.headers.get("Authorization"), body
+                )
+                if status != 200:
+                    self._write_json(status, payload)
+                    return
+                body["_auth_user_id"] = payload["user"]["id"]
+                body["case_id"] = payload["case_id"]
             want_stream = bool(body.get("stream")) or "stream=1" in (self.path or "")
             if want_stream:
                 self.send_response(200)
