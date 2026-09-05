@@ -4231,10 +4231,57 @@ function tryHandleOrchestrate(fullUserMessage) {
   return (async function() {
     if (!CONFIG || !CONFIG.mcpServerUrl) return false;
     let shell = null;
-    try {
-      shell = addOrchestrateProgressShell();
-      paintOrchestrateFlow(shell.flowSlot, [], 0, -1);
-      const resp = await fetch(`${CONFIG.mcpServerUrl}/api/orchestrate`, {
+
+    async function applyOrchestrateSuccess(targetShell, data, userMessage) {
+      const flow = (data.capabilities && data.capabilities.flow) || data.flow || [];
+      if (typeof currentStreamingMessage !== 'undefined' && currentStreamingMessage) {
+        try { currentStreamingMessage.remove(); } catch (e) {}
+        currentStreamingMessage = null;
+      }
+      paintOrchestrateFlow(targetShell.flowSlot, flow, flow.length, -1);
+      const answer = ((data.visible_text || '') + (data.pending_question ? '\n\n' + data.pending_question : '')).trim();
+      if (!answer && !flow.length) {
+        return false;
+      }
+      if (targetShell.answer) {
+        targetShell.answer.hidden = !answer;
+        targetShell.answer.textContent = answer;
+      } else {
+        targetShell.content.hidden = false;
+        targetShell.content.textContent = answer;
+      }
+      const citations = collectOrchestrateCitations(data);
+      if (citations.length && targetShell.content) {
+        renderOrchestrateCitations(targetShell.content, citations);
+      }
+      if (data.artifact && data.artifact.file_id) {
+        addOrchestrateDownload(data.artifact);
+      }
+      if (currentSession) {
+        currentSession.conversationHistory.push({ role: 'user', content: userMessage });
+        currentSession.conversationHistory.push({
+          role: 'assistant',
+          content: data.visible_text,
+          artifact: data.artifact || undefined,
+          capabilities: data.capabilities || undefined
+        });
+        if (currentSession.sessionId && typeof addMessageToServer === 'function' && !data.saved_to_session) {
+          addMessageToServer(currentSession.sessionId, 'user', userMessage).catch(() => {});
+          const extra = {};
+          if (data.artifact) extra.artifact = data.artifact;
+          if (data.capabilities) extra.capabilities = data.capabilities;
+          addMessageToServer(currentSession.sessionId, 'assistant', data.visible_text, Object.keys(extra).length ? extra : null).catch(() => {});
+        }
+        if (typeof saveSession === 'function') {
+          saveSession(currentSession).catch(() => {});
+        }
+      }
+      console.log('✅ orchestrate handled', data.agent || '');
+      return true;
+    }
+
+    function doRequest() {
+      return fetch(`${CONFIG.mcpServerUrl}/api/orchestrate`, {
         method: 'POST',
         headers: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
           ? LegalMindAuth.authHeaders()
@@ -4248,74 +4295,80 @@ function tryHandleOrchestrate(fullUserMessage) {
             : null
         })
       });
+    }
+
+    function attachRetry(targetShell, errText) {
+      const btn = showOrchestrateFailure(targetShell, errText);
+      if (!btn) return;
+      btn.onclick = async function () {
+        btn.disabled = true;
+        btn.textContent = '重试中…';
+        try {
+          const resp = await doRequest();
+          if (resp.status === 401) {
+            if (typeof LegalMindAuth !== 'undefined') LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
+            if (targetShell && targetShell.wrap) targetShell.wrap.remove();
+            return;
+          }
+          if (!resp.ok) {
+            const errBody = await resp.json().catch(function () { return {}; });
+            attachRetry(targetShell, errBody.error || ('请求失败 ' + resp.status));
+            return;
+          }
+          const data = await resp.json();
+          if (data && data.legacy) {
+            attachRetry(targetShell, '当前请求需走旧路径，请刷新页面后重发。');
+            return;
+          }
+          if (!data) {
+            attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
+            return;
+          }
+          clearOrchestrateRetry(targetShell);
+          const ok = await applyOrchestrateSuccess(targetShell, data, fullUserMessage);
+          if (!ok) {
+            attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
+          }
+        } catch (e) {
+          attachRetry(targetShell, e.message || '服务暂时不可用，请稍后重试。');
+        }
+      };
+    }
+
+    try {
+      shell = addOrchestrateProgressShell();
+      paintOrchestrateFlow(shell.flowSlot, [], 0, -1);
+      const resp = await doRequest();
       if (resp.status === 401) {
         if (typeof LegalMindAuth !== 'undefined') LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
         if (shell && shell.wrap) shell.wrap.remove();
         return true;
       }
-      if (resp.status === 400 || resp.status === 403) {
+      if (!resp.ok) {
         const errBody = await resp.json().catch(function () { return {}; });
-        if (shell && shell.answer) {
-          shell.answer.hidden = false;
-          shell.answer.textContent = errBody.error || ('请求失败 ' + resp.status);
-        }
+        attachRetry(shell, errBody.error || ('请求失败 ' + resp.status));
         return true;
       }
       const data = await resp.json();
-      if (!data || data.legacy) {
+      if (data && data.legacy) {
         if (shell && shell.wrap) shell.wrap.remove();
         return false;
       }
-      const flow = (data.capabilities && data.capabilities.flow) || data.flow || [];
-      if (typeof currentStreamingMessage !== 'undefined' && currentStreamingMessage) {
-        try { currentStreamingMessage.remove(); } catch (e) {}
-        currentStreamingMessage = null;
+      if (!data) {
+        attachRetry(shell, '服务暂时不可用，请稍后重试。');
+        return true;
       }
-      paintOrchestrateFlow(shell.flowSlot, flow, flow.length, -1);
-      const answer = ((data.visible_text || '') + (data.pending_question ? '\n\n' + data.pending_question : '')).trim();
-      if (!answer && !flow.length) {
-        if (shell && shell.wrap) shell.wrap.remove();
-        return false;
+      const ok = await applyOrchestrateSuccess(shell, data, fullUserMessage);
+      if (!ok) {
+        attachRetry(shell, '服务暂时不可用，请稍后重试。');
+        return true;
       }
-      if (shell.answer) {
-        shell.answer.hidden = !answer;
-        shell.answer.textContent = answer;
-      } else {
-        shell.content.hidden = false;
-        shell.content.textContent = answer;
-      }
-      const citations = collectOrchestrateCitations(data);
-      if (citations.length && shell.content) {
-        renderOrchestrateCitations(shell.content, citations);
-      }
-      if (data.artifact && data.artifact.file_id) {
-        addOrchestrateDownload(data.artifact);
-      }
-      if (currentSession) {
-        currentSession.conversationHistory.push({ role: 'user', content: fullUserMessage });
-        currentSession.conversationHistory.push({
-          role: 'assistant',
-          content: data.visible_text,
-          artifact: data.artifact || undefined,
-          capabilities: data.capabilities || undefined
-        });
-        if (currentSession.sessionId && typeof addMessageToServer === 'function' && !data.saved_to_session) {
-          addMessageToServer(currentSession.sessionId, 'user', fullUserMessage).catch(() => {});
-          const extra = {};
-          if (data.artifact) extra.artifact = data.artifact;
-          if (data.capabilities) extra.capabilities = data.capabilities;
-          addMessageToServer(currentSession.sessionId, 'assistant', data.visible_text, Object.keys(extra).length ? extra : null).catch(() => {});
-        }
-        if (typeof saveSession === 'function') {
-          saveSession(currentSession).catch(() => {});
-        }
-      }
-      console.log('✅ orchestrate handled', data.agent || '');
       return true;
     } catch (err) {
-      console.warn('orchestrate fallback to single-agent path:', err);
-      if (shell && shell.wrap && shell.wrap.parentNode) shell.wrap.remove();
-      return false;
+      console.warn('orchestrate failed; showing retry:', err);
+      if (!shell) shell = addOrchestrateProgressShell();
+      attachRetry(shell, err.message || '服务暂时不可用，请稍后重试。');
+      return true;
     }
   })();
 }
@@ -4549,6 +4602,34 @@ function previewOrchestrateFlow(text) {
   const resultName = /起诉状|生成文书|写一份|起草|导出文书/.test(t) ? '返回文书结果' : '返回分析结果';
   steps.push({ kind: 'result', id: 'return', name: resultName });
   return steps;
+}
+
+function clearOrchestrateRetry(shell) {
+  if (!shell || !shell.content) return;
+  const old = shell.content.querySelector('.orchestrate-retry-row');
+  if (old) old.remove();
+}
+
+function showOrchestrateFailure(shell, errText) {
+  if (!shell) return;
+  clearOrchestrateRetry(shell);
+  const msg = (errText || '服务暂时不可用，请稍后重试。').trim();
+  if (shell.answer) {
+    shell.answer.hidden = false;
+    shell.answer.textContent = msg;
+  } else if (shell.content) {
+    shell.content.hidden = false;
+    // keep structure: prefer answer child
+  }
+  const row = document.createElement('div');
+  row.className = 'orchestrate-retry-row';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'orchestrate-retry-btn';
+  btn.textContent = '重试';
+  row.appendChild(btn);
+  (shell.content || shell.wrap).appendChild(row);
+  return btn;
 }
 
 function addOrchestrateProgressShell() {

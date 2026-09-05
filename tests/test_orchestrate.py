@@ -374,6 +374,84 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIn("legal-doc-guide", skill_ids)
         self.assertIn("legal://doc_template", mcp_ids)
 
+    def test_llm_gate_law_search_uses_kb(self):
+        calls = {"n": 0, "retrieve": []}
+
+        def write_llm(system, user, hist=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return '{"domain":"legal","intent":"law_search"}'
+            return "unused"
+
+        def retrieve(q, scopes=None):
+            calls["retrieve"].append(tuple(scopes or ()))
+            return {
+                "laws": "劳动合同法第六十四条",
+                "cases": "",
+                "law_citations": [],
+                "case_citations": [],
+            }
+
+        result = run_orchestrate(
+            user_text="检索劳动合同法第64条",
+            messages=[],
+            llm=None,
+            retrieve_fn=retrieve,
+            write_llm=write_llm,
+            skills=[],
+        )
+        self.assertEqual(calls["retrieve"], [("law",)])
+        self.assertEqual(result.get("plan", {}).get("intent"), "law_search")
+
+    def test_llm_gate_non_legal_skips_retrieve(self):
+        retrieve_calls = []
+
+        def write_llm(system, user, hist=None):
+            if "分类" in system or "JSON" in system or "intent" in system.lower():
+                return '{"domain":"non_legal"}'
+            return "今天适合出门。"
+
+        def retrieve(q, scopes=None):
+            retrieve_calls.append(q)
+            return {"laws": "x", "cases": "y"}
+
+        result = run_orchestrate(
+            user_text="今天天气怎么样",
+            messages=[],
+            llm=None,
+            retrieve_fn=retrieve,
+            write_llm=write_llm,
+            skills=[],
+        )
+        self.assertFalse(retrieve_calls)
+        self.assertIn("更擅长", result["visible_text"])
+        self.assertIn("今天适合出门", result["visible_text"])
+        self.assertEqual(result.get("plan", {}).get("intent"), "non_legal")
+        self.assertEqual(result.get("citations") or [], [])
+
+    def test_llm_gate_bad_json_falls_back_to_keyword(self):
+        retrieve_calls = []
+
+        def write_llm(system, user, hist=None):
+            if "JSON" in system or "分类" in system:
+                return "不是json"
+            return "ok"
+
+        def retrieve(q, scopes=None):
+            retrieve_calls.append(q)
+            return {"laws": "x", "cases": "y"}
+
+        result = run_orchestrate(
+            user_text="你好",
+            messages=[],
+            llm=None,
+            retrieve_fn=retrieve,
+            write_llm=write_llm,
+            skills=[],
+        )
+        self.assertFalse(retrieve_calls)
+        self.assertEqual(result.get("plan", {}).get("intent"), "chitchat")
+
 
 if __name__ == "__main__":
     unittest.main()

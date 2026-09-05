@@ -7,8 +7,11 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.graph import OrchestrationError, validate_subcall
+from agents.intent_gate import NON_LEGAL_CLOSING, classify_domain_intent
 from agents.workflow import emit_step, get_workflow
 from docx_export import build_docx_bytes, default_filename
+
+NON_LEGAL_SYSTEM = "简洁回答用户；不要编造法律意见。"
 
 ORCH_DELIM = "==ORCH=="
 
@@ -274,14 +277,21 @@ def classify_intent(user_text: str) -> str:
     return "legal_analysis"
 
 
-def heuristic_plan(user_text: str) -> Dict[str, Any]:
-    intent = classify_intent(user_text)
+def plan_for_intent(intent: str) -> Dict[str, Any]:
+    """Map a classified intent string to an orchestration plan."""
     if intent == "chitchat":
         return {
             "type": "plan",
             "intent": intent,
             "retrieval_scopes": [],
             "steps": [{"agent": "text_analysis", "allow_subcalls": []}],
+        }
+    if intent == "non_legal":
+        return {
+            "type": "plan",
+            "intent": "non_legal",
+            "retrieval_scopes": [],
+            "steps": [],
         }
     if intent == "doc_writing":
         return {
@@ -317,16 +327,53 @@ def heuristic_plan(user_text: str) -> Dict[str, Any]:
                 "allow_subcalls": ["legal_retrieval"],
             }],
         }
-    # legal_analysis（含断案）
+    # legal_analysis（含断案）及未知意图兜底
     return {
         "type": "plan",
-        "intent": intent,
+        "intent": intent if intent else "legal_analysis",
         "retrieval_scopes": ["law", "case"],
         "steps": [{
             "agent": "text_analysis",
             "allow_subcalls": ["legal_retrieval"],
         }],
     }
+
+
+def heuristic_plan(user_text: str) -> Dict[str, Any]:
+    return plan_for_intent(classify_intent(user_text))
+
+
+def _run_non_legal(
+    user_text: str,
+    messages: List[Dict],
+    write_llm,
+    workflow: Any = None,
+) -> Dict[str, Any]:
+    """Short path: answer without KB retrieval; append legal-specialty closing."""
+    emit_step("agent", "orchestrator", SPECIALIST_LABELS["orchestrator"])
+    body = ""
+    if write_llm:
+        try:
+            body = write_llm(NON_LEGAL_SYSTEM, user_text or "", messages) or ""
+        except Exception as exc:
+            print(f"[orchestrator] non_legal write_llm failed: {exc}")
+            body = ""
+    body = (body or "").strip()
+    if not body:
+        body = "好的，有什么我可以帮您的吗？"
+    if "更擅长" not in body:
+        body = f"{body}\n\n{NON_LEGAL_CLOSING}"
+    local_plan = plan_for_intent("non_legal")
+    result = {
+        "agent": "text_analysis",
+        "visible_text": body,
+        "status": "complete",
+        "citations": [],
+        "plan": local_plan,
+        "subcalls_used": [],
+        "capabilities": merge_capability_items([cap_agent("orchestrator")]),
+    }
+    return attach_call_flow(result, workflow)
 
 
 def guess_template_name(user_text: str) -> str:
@@ -796,34 +843,47 @@ def run_orchestrate(
         own_token = bind_workflow(workflow)
 
     def _execute() -> Dict[str, Any]:
-        plan = None
-        if llm is not None:
-            try:
-                raw = llm(user_text, messages, skills)
-                parsed = parse_orch_payload(raw)
-                if parsed.get("type") == "ask_user":
-                    return {
-                        "visible_text": parsed.get("pending_question") or parsed.get("prompt_to_user") or "",
-                        "agent": "orchestrator",
-                        "plan": parsed,
-                        "pending_question": parsed.get("pending_question") or parsed.get("prompt_to_user"),
-                    }
-                local_plan = parsed
-            except Exception as exc:
-                print(f"[orchestrator] llm plan failed, heuristic: {exc}")
+        local_plan = None
+        from_gate = False
+
+        # LLM domain/intent gate (when write_llm is available)
+        if write_llm is not None:
+            gate = classify_domain_intent(write_llm, user_text, messages)
+            if gate is not None:
+                if gate.get("domain") == "non_legal":
+                    return _run_non_legal(user_text, messages, write_llm, workflow)
+                if gate.get("domain") == "legal":
+                    local_plan = plan_for_intent(gate.get("intent") or "legal_analysis")
+                    from_gate = True
+
+        if not from_gate:
+            if llm is not None:
+                try:
+                    raw = llm(user_text, messages, skills)
+                    parsed = parse_orch_payload(raw)
+                    if parsed.get("type") == "ask_user":
+                        return {
+                            "visible_text": parsed.get("pending_question") or parsed.get("prompt_to_user") or "",
+                            "agent": "orchestrator",
+                            "plan": parsed,
+                            "pending_question": parsed.get("pending_question") or parsed.get("prompt_to_user"),
+                        }
+                    local_plan = parsed
+                except Exception as exc:
+                    print(f"[orchestrator] llm plan failed, heuristic: {exc}")
+                    local_plan = None
+            else:
                 local_plan = None
-        else:
-            local_plan = None
-        if local_plan is None:
-            local_plan = heuristic_plan(user_text)
-        else:
-            # LLM 计划缺省意图/范围时，用门闸补齐，避免无差别全库检索
-            if not local_plan.get("intent"):
-                local_plan["intent"] = classify_intent(user_text)
-            if "retrieval_scopes" not in local_plan:
-                local_plan["retrieval_scopes"] = heuristic_plan(user_text).get(
-                    "retrieval_scopes", ["law", "case"]
-                )
+            if local_plan is None:
+                local_plan = heuristic_plan(user_text)
+            else:
+                # LLM 计划缺省意图/范围时，用门闸补齐，避免无差别全库检索
+                if not local_plan.get("intent"):
+                    local_plan["intent"] = classify_intent(user_text)
+                if "retrieval_scopes" not in local_plan:
+                    local_plan["retrieval_scopes"] = heuristic_plan(user_text).get(
+                        "retrieval_scopes", ["law", "case"]
+                    )
         emit_step("agent", "orchestrator", SPECIALIST_LABELS["orchestrator"])
         if local_plan.get("type") == "legacy":
             return {"legacy": True, "visible_text": "", "agent": "orchestrator", "plan": local_plan}

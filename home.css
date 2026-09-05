@@ -194,9 +194,8 @@ body::before {
   z-index: 1;
 }
 
-/* 历史记录：标题行左侧，与右侧管理后台对等 */
-.history-tab,
-.admin-tab {
+/* 标题行左侧历史入口 */
+.history-tab {
   justify-self: start;
   align-self: center;
   display: flex !important;
@@ -218,41 +217,25 @@ body::before {
   opacity: 1 !important;
   min-width: 120px;
   margin: 0 !important;
-}
-
-.history-tab {
   grid-column: 1;
 }
 
-.admin-tab {
-  grid-column: 3;
-  justify-self: end;
-}
-
-.admin-tab[hidden] {
-  display: none !important;
-}
-
-.history-tab:hover,
-.admin-tab:hover {
+.history-tab:hover {
   background: rgba(255, 255, 255, 0.25);
   border-color: rgba(255, 255, 255, 0.3);
 }
 
-.history-tab:active,
-.admin-tab:active {
+.history-tab:active {
   transform: none;
 }
 
-.history-tab svg,
-.admin-tab svg {
+.history-tab svg {
   width: 24px;
   height: 24px;
   flex-shrink: 0;
 }
 
-.history-tab-text,
-.admin-tab-text {
+.history-tab-text {
   white-space: nowrap;
 }
 
@@ -280,18 +263,8 @@ body::before {
     font-size: 0.9rem;
     min-width: 0;
   }
-
-  .admin-tab {
-    grid-column: 2;
-    justify-self: end;
-    margin: 0 !important;
-    padding: 8px 12px;
-    font-size: 0.9rem;
-    min-width: 0;
-  }
   
-  .history-tab svg,
-  .admin-tab svg {
+  .history-tab svg {
     width: 20px;
     height: 20px;
   }

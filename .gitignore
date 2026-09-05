@@ -1,5 +1,6 @@
 .DS_Store
 .cursor/
+.superpowers/
 
 # Local secrets and runtime data
 config.json

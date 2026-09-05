@@ -4,14 +4,6 @@ console.log(`[HOME] home.js loaded, version=${HOME_JS_VERSION}`);
 let selectedFiles = [];
 let uploadedFileIds = []; // 存储已上传的文件ID映射 {fileIndex: fileId}
 
-function canOpenAdmin() {
-  if (!window.LegalMindAuth || !LegalMindAuth.getToken()) return false;
-  return LegalMindAuth.hasPerm('page.admin')
-    || LegalMindAuth.hasPerm('cap.user_manage')
-    || LegalMindAuth.hasPerm('cap.case_manage')
-    || LegalMindAuth.hasPerm('cap.role_manage');
-}
-
 async function loadHomeCaseOptions() {
   const sel = document.getElementById('homeActiveCaseSelect');
   if (!sel || typeof LegalMindAuth === 'undefined' || !LegalMindAuth.getToken()) return;
@@ -48,22 +40,6 @@ async function loadHomeCaseOptions() {
     const v = sel.value ? parseInt(sel.value, 10) : null;
     LegalMindAuth.setCaseId(v);
   };
-}
-
-function syncAdminEntry() {
-  const adminTab = document.getElementById('adminTab');
-  if (!adminTab) return;
-  // index.html 顶栏已有「管理后台」；首页嵌在壳层 iframe 内时不再重复展示
-  const inAppShell = window.parent !== window && !!(window.parent && window.parent.loadPage);
-  adminTab.hidden = inAppShell || !canOpenAdmin();
-}
-
-function goPage(url) {
-  if (window.parent !== window && window.parent.loadPage) {
-    window.parent.loadPage(url);
-  } else {
-    window.location.href = url;
-  }
 }
 
 // 配置缓存（减少重复请求 config.json）
@@ -200,24 +176,11 @@ document.addEventListener('DOMContentLoaded', function() {
     };
   }
 
-  const adminTab = document.getElementById('adminTab');
-  if (adminTab) {
-    adminTab.onclick = () => {
-      if (!canOpenAdmin()) {
-        goPage('login.html?next=admin.html');
-        return;
-      }
-      goPage('admin.html');
-    };
-  }
-  syncAdminEntry();
   if (window.LegalMindAuth && LegalMindAuth.getToken()) {
-    LegalMindAuth.fetchMe().then(syncAdminEntry).catch(function () { syncAdminEntry(); });
+    LegalMindAuth.fetchMe().catch(function () {});
     loadHomeCaseOptions().catch(function (e) {
       console.warn('加载案件列表失败', e);
     });
-  } else {
-    syncAdminEntry();
   }
 
   // 文件上传按钮点击

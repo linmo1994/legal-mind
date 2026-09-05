@@ -10,60 +10,8 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 import uuid
 
-# 模拟数据存储
+# 模拟数据存储（合同审查规则仍为静态清单；法规/类案改走知识库）
 MOCK_DATA = {
-    "law_regulations": {
-        "民法典311条": """《中华人民共和国民法典》第三百一十一条
-
-无处分权人将不动产或者动产转让给受让人的，所有权人有权追回；除法律另有规定外，符合下列情形的，受让人取得该不动产或者动产的所有权：
-
-（一）受让人受让该不动产或者动产时是善意；
-（二）以合理的价格转让；
-（三）转让的不动产或者动产依照法律规定应当登记的已经登记，不需要登记的已经交付给受让人。
-
-受让人依据前款规定取得不动产或者动产的所有权的，原所有权人有权向无处分权人请求损害赔偿。
-
-当事人善意取得其他物权的，参照适用前两款规定。""",
-        "合同法第52条": """《中华人民共和国合同法》第五十二条
-
-有下列情形之一的，合同无效：
-
-（一）一方以欺诈、胁迫的手段订立合同，损害国家利益；
-（二）恶意串通，损害国家、集体或者第三人利益；
-（三）以合法形式掩盖非法目的；
-（四）损害社会公共利益；
-（五）违反法律、行政法规的强制性规定。""",
-        "劳动合同法第64条": """《中华人民共和国劳动合同法》第六十四条
-
-被派遣劳动者有权在劳务派遣单位或者用工单位依法参加或者组织工会，维护自身的合法权益。""",
-        "劳动合同法64条": """《中华人民共和国劳动合同法》第六十四条
-
-被派遣劳动者有权在劳务派遣单位或者用工单位依法参加或者组织工会，维护自身的合法权益。""",
-        "劳动合同的第六十四条": """《中华人民共和国劳动合同法》第六十四条
-
-被派遣劳动者有权在劳务派遣单位或者用工单位依法参加或者组织工会，维护自身的合法权益。""",
-        "民法典": """《中华人民共和国民法典》相关条文
-
-如需查询具体条文，请提供准确的条文编号，例如：民法典311条、民法典第500条等。""",
-        "合同法": """《中华人民共和国合同法》相关条文
-
-如需查询具体条文，请提供准确的条文编号，例如：合同法第52条、合同法第107条等。""",
-        "劳动合同法": """《中华人民共和国劳动合同法》相关条文
-
-如需查询具体条文，请提供准确的条文编号，例如：劳动合同法第64条、劳动合同法第52条等。"""
-    },
-    "similar_cases": {
-        "default": [
-            """案例1：民间借贷纠纷案
-案号：（2023）京0101民初12345号
-裁判要点：原告与被告之间存在民间借贷关系，被告未按约定还款，应承担违约责任。
-判决结果：支持原告诉讼请求，判令被告偿还本金及利息。""",
-            """案例2：民间借贷纠纷案
-案号：（2023）沪0101民初67890号
-裁判要点：借贷双方约定的利率未超过合同成立时一年期贷款市场报价利率四倍的，应予支持。
-判决结果：支持原告诉讼请求，利息按约定利率计算。"""
-        ]
-    },
     "contract_review_rules": [
         "合同主体审查：确认合同双方主体资格，检查营业执照、授权委托书等",
         "合同标的审查：明确标的物名称、规格、数量、质量等关键信息",
@@ -238,13 +186,13 @@ class MCPServer:
             {
                 "uri": "legal://law_regulation",
                 "name": "法律法规",
-                "description": "检索法律法规：根据用户检索内容返回相关法律法规条文文本。",
+                "description": "从知识库法规库检索：按查询内容返回已向量化的法律法规条文片段。",
                 "mimeType": "text/plain"
             },
             {
                 "uri": "legal://similar_cases",
                 "name": "类案检索",
-                "description": "检索类案：根据案情内容返回相似案例的裁判文书文本列表。",
+                "description": "从知识库裁判案例库检索：按案情描述返回已向量化的相似案例片段。",
                 "mimeType": "text/plain"
             },
             {
@@ -856,145 +804,20 @@ class MCPServer:
             return self._error_response(request_id, -32602, msg)
 
         elif uri == "legal://law_regulation":
-            # 从多个可能的位置提取query参数
+            # 知识库法规库检索（不再使用 MOCK_DATA）
             query = ""
             if "arguments" in params and isinstance(params["arguments"], dict):
-                query = params["arguments"].get("query", "")
-            # 如果URI中包含query参数（如 legal://law_regulation?query=xxx）
+                query = params["arguments"].get("query", "") or ""
             if not query and "?" in uri:
-                uri_parts = uri.split("?")
-                if len(uri_parts) > 1:
-                    query_params = uri_parts[1]
-                    if "query=" in query_params:
-                        query = query_params.split("query=")[1].split("&")[0]
-                        # URL解码
-                        import urllib.parse
-                        query = urllib.parse.unquote(query)
-            
-            if not query:
-                query = ""
-            
-            print(f"[DEBUG] law_regulation查询 - query: '{query}', uri: '{uri}'")
-            
-            # 首先尝试精确匹配
-            if query in MOCK_DATA["law_regulations"]:
-                print(f"[DEBUG] 精确匹配成功: '{query}'")
-                regulation = MOCK_DATA["law_regulations"][query]
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "text/plain",
-                                "text": regulation
-                            }
-                        ]
-                    }
-                }
-            
-            # 尝试模糊匹配：支持多种格式
-            # 例如："劳动合同的第六十四条" -> "劳动合同法第64条" -> "劳动合同法64条"
-            import re
-            
-            # 中文数字到阿拉伯数字的转换字典
-            chinese_digit_map = {
-                "零": 0, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
-                "六": 6, "七": 7, "八": 8, "九": 9, "十": 10
-            }
-            
-            def chinese_to_arabic(chinese_num_str):
-                """将中文数字转换为阿拉伯数字"""
-                if not chinese_num_str:
-                    return None
-                # 处理"六十四"这种格式
-                if "十" in chinese_num_str:
-                    parts = chinese_num_str.split("十")
-                    if len(parts) == 2:
-                        tens = chinese_digit_map.get(parts[0], 0)
-                        ones = chinese_digit_map.get(parts[1], 0)
-                        if tens == 0:  # "十四" -> 14
-                            return 10 + ones
-                        else:  # "六十四" -> 64
-                            return tens * 10 + ones
-                    elif len(parts) == 1:
-                        # "十" 或 "十X"
-                        if parts[0]:
-                            return 10 + chinese_digit_map.get(parts[0], 0)
-                        else:
-                            return 10
-                else:
-                    # 单个数字
-                    return chinese_digit_map.get(chinese_num_str, None)
-            
-            # 尝试匹配各种可能的key格式
-            possible_keys = []
-            if "劳动合同" in query or "劳动合同法" in query:
-                # 先尝试提取阿拉伯数字
-                numbers = re.findall(r'\d+', query)
-                # 如果没有阿拉伯数字，尝试提取中文数字
-                if not numbers:
-                    # 匹配"第六十四"、"六十四"等格式
-                    chinese_num_match = re.search(r'第?([一二三四五六七八九十]+)', query)
-                    if chinese_num_match:
-                        chinese_num = chinese_num_match.group(1)
-                        arabic_num = chinese_to_arabic(chinese_num)
-                        if arabic_num:
-                            numbers = [str(arabic_num)]
-                
-                if numbers:
-                    num = numbers[0]
-                    possible_keys = [
-                        f"劳动合同法第{num}条",
-                        f"劳动合同法{num}条",
-                        f"劳动合同的第{num}条",
-                        f"劳动合同的{num}条",
-                        query  # 原始查询
-                    ]
-                    print(f"[DEBUG] 劳动合同法查询，提取数字: {num}, 可能的keys: {possible_keys}")
-            elif "合同法" in query and "劳动合同" not in query:
-                numbers = re.findall(r'\d+', query)
-                if numbers:
-                    num = numbers[0]
-                    possible_keys = [
-                        f"合同法第{num}条",
-                        f"合同法{num}条",
-                        query
-                    ]
-            elif "民法典" in query:
-                numbers = re.findall(r'\d+', query)
-                if numbers:
-                    num = numbers[0]
-                    possible_keys = [
-                        f"民法典{num}条",
-                        f"民法典第{num}条",
-                        query
-                    ]
-            else:
-                possible_keys = [query]
-            
-            # 尝试匹配
-            print(f"[DEBUG] 尝试匹配查询: '{query}', 可能的keys: {possible_keys}")
-            for key in possible_keys:
-                if key in MOCK_DATA["law_regulations"]:
-                    regulation = MOCK_DATA["law_regulations"][key]
-                    print(f"[DEBUG] 模糊匹配成功: '{query}' -> '{key}'")
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "result": {
-                            "contents": [
-                                {
-                                    "uri": uri,
-                                    "mimeType": "text/plain",
-                                    "text": regulation
-                                }
-                            ]
-                        }
-                    }
-            
-            # 如果都匹配不上，返回默认提示
+                import urllib.parse
+                qs = uri.split("?", 1)[1]
+                if "query=" in qs:
+                    query = urllib.parse.unquote(qs.split("query=")[1].split("&")[0])
+            from kb_retrieve_resolve import empty_law_message, resolve_law_regulation_text
+            vs = getattr(self, "vector_service", None)
+            text_out = resolve_law_regulation_text(vs, query)
+            if not text_out:
+                text_out = empty_law_message(query)
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -1003,16 +826,28 @@ class MCPServer:
                         {
                             "uri": uri,
                             "mimeType": "text/plain",
-                            "text": f"未找到关于'{query}'的具体法规，请提供更准确的法规编号或关键词。\n\n提示：支持的格式包括：\n- 劳动合同法第64条\n- 劳动合同法64条\n- 劳动合同的第六十四条\n- 合同法第52条\n- 民法典311条"
+                            "text": text_out,
                         }
                     ]
-                }
+                },
             }
-        
+
         elif uri == "legal://similar_cases":
-            case_description = params.get("arguments", {}).get("case_description", "")
-            cases = MOCK_DATA["similar_cases"].get("default", [])
-            cases_text = "\n\n".join(cases)
+            # 知识库裁判案例库检索（不再使用 MOCK_DATA）
+            args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
+            case_description = (
+                (args or {}).get("case_description")
+                or (args or {}).get("query")
+                or ""
+            )
+            from kb_retrieve_resolve import empty_case_message, resolve_similar_cases_text
+            vs = getattr(self, "vector_service", None)
+            text_out = resolve_similar_cases_text(vs, case_description)
+            if not text_out:
+                text_out = empty_case_message(case_description)
+            else:
+                prefix = f"根据案情描述：{case_description or '（未指定）'}"
+                text_out = prefix + "\n\n知识库相似案例：\n\n" + text_out
             return {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -1021,12 +856,12 @@ class MCPServer:
                         {
                             "uri": uri,
                             "mimeType": "text/plain",
-                            "text": f"根据案情描述：{case_description}\n\n找到以下相似案例：\n\n{cases_text}"
+                            "text": text_out,
                         }
                     ]
-                }
+                },
             }
-        
+
         elif uri == "legal://contract_review_rules":
             rules = "\n".join([f"{i+1}. {rule}" for i, rule in enumerate(MOCK_DATA["contract_review_rules"])])
             return {

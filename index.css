@@ -123,6 +123,21 @@ body {
   color: #0f172a;
 }
 
+.nav-user-dropdown-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: #e5e7eb;
+}
+
+.nav-user-dropdown button.nav-user-logout {
+  color: #b91c1c;
+}
+
+.nav-user-dropdown button.nav-user-logout:hover {
+  background: #fef2f2;
+  color: #991b1b;
+}
+
 .contact-modal {
   position: fixed;
   inset: 0;

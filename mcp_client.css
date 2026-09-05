@@ -732,6 +732,30 @@ body {
   word-wrap: break-word;
 }
 
+.orchestrate-retry-row {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.orchestrate-retry-btn {
+  background: #fff;
+  border: 1px solid #ddd;
+  color: #1a4a6e;
+  padding: 8px 20px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.orchestrate-retry-btn:hover {
+  background: #f8f9fa;
+  border-color: #1a4a6e;
+  color: #0f2f4a;
+}
+
 .cite-list {
   margin-top: 12px;
   padding-top: 10px;
