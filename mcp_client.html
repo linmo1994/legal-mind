@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind（MCP）</title>
-  <link rel="stylesheet" href="mcp_client.css?v=20260904rbac">
+  <link rel="stylesheet" href="mcp_client.css?v=20260905casetools">
   <script>
     // 检测file://协议并提示
     if (window.location.protocol === 'file:') {
@@ -35,12 +35,6 @@
         </svg>
       </button>
       <h1 class="header-title">⚖️ LegalMind 智能体</h1>
-      <div class="header-case-bar" title="当前办案上下文">
-        <label for="activeCaseSelect">当前案件</label>
-        <select id="activeCaseSelect">
-          <option value="">请选择案件…</option>
-        </select>
-      </div>
     </header>
 
     <div class="main-content">
@@ -117,7 +111,15 @@
               placeholder="请输入您的问题或需求..." 
               rows="3"
             ></textarea>
-            <button id="fileUploadBtn" class="btn-icon btn-icon-float" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
+            <div class="composer-tools">
+              <button id="fileUploadBtn" class="btn-icon btn-icon-float" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
+              <div class="composer-case-bar" title="当前办案上下文">
+                <label for="activeCaseSelect" class="sr-only">案件</label>
+                <select id="activeCaseSelect" aria-label="选择案件">
+                  <option value="" selected>请选择案件…</option>
+                </select>
+              </div>
+            </div>
             <button id="sendBtn" class="btn-primary btn-send-float" onclick="handleUserInput(); return false;" title="发送">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
@@ -137,7 +139,8 @@
   </div>
 
   <script src="auth.js"></script>
-  <script src="mcp_client.js?v=20260904rbac"></script>
+  <script src="admin_kb_files.js?v=20260905preview"></script>
+  <script src="mcp_client.js?v=20260905casetools"></script>
 </body>
 </html>
 

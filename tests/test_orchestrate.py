@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(ROOT, "server"))
 
 from agents.orchestrator import (  # noqa: E402
     RetrievalCache,
+    classify_intent,
     guess_template_name,
     heuristic_plan,
     parse_orch_payload,
@@ -22,10 +23,36 @@ class TestOrchestrator(unittest.TestCase):
         self.assertEqual(payload["type"], "plan")
         self.assertEqual(payload["steps"][0]["agent"], "text_analysis")
 
+    def test_classify_intent_routes(self):
+        self.assertEqual(classify_intent("帮我写一份要素式民间借贷起诉状"), "doc_writing")
+        self.assertEqual(classify_intent("检索劳动合同法第64条"), "law_search")
+        self.assertEqual(classify_intent("查找类似的民间借贷类案"), "case_search")
+        self.assertEqual(classify_intent("请作为法官帮我断案"), "legal_analysis")
+        self.assertEqual(classify_intent("请帮我做合同审查"), "contract_review")
+        self.assertEqual(classify_intent("你好"), "chitchat")
+        self.assertEqual(classify_intent("今天天气怎么样"), "chitchat")
+
     def test_heuristic_analysis_allows_retrieval(self):
-        plan = heuristic_plan("请结合法规分析这份案情")
+        plan = heuristic_plan("请结合法规分析这份案情：原告张三与被告李四因借款发生争议")
+        self.assertEqual(plan["intent"], "legal_analysis")
         self.assertEqual(plan["steps"][0]["agent"], "text_analysis")
         self.assertIn("legal_retrieval", plan["steps"][0]["allow_subcalls"])
+        self.assertEqual(plan.get("retrieval_scopes"), ["law", "case"])
+
+    def test_heuristic_chitchat_skips_kb(self):
+        plan = heuristic_plan("你好呀")
+        self.assertEqual(plan["intent"], "chitchat")
+        self.assertEqual(plan["steps"][0]["allow_subcalls"], [])
+        self.assertEqual(plan.get("retrieval_scopes"), [])
+
+    def test_heuristic_law_and_case_search(self):
+        law = heuristic_plan("帮我检索民法典关于善意取得的规定")
+        self.assertEqual(law["intent"], "law_search")
+        self.assertEqual(law["steps"][0]["agent"], "legal_retrieval")
+        self.assertEqual(law.get("retrieval_scopes"), ["law"])
+        case = heuristic_plan("帮我查找劳动争议类案")
+        self.assertEqual(case["intent"], "case_search")
+        self.assertEqual(case.get("retrieval_scopes"), ["case"])
 
     def test_guess_template_name(self):
         self.assertEqual(guess_template_name("帮我生成民间借贷纠纷起诉状"), "民间借贷纠纷起诉状")
@@ -49,12 +76,12 @@ class TestOrchestrator(unittest.TestCase):
     def test_run_analysis_subcalls_retrieval(self):
         calls = []
 
-        def retrieve(query):
-            calls.append(query)
+        def retrieve(query, scopes=None):
+            calls.append((query, tuple(scopes or ())))
             return {"laws": "合同法第五十二条", "cases": "类案A"}
 
         result = run_orchestrate(
-            user_text="请结合法规和类案分析民间借贷纠纷",
+            user_text="请结合法规和类案分析民间借贷纠纷，原告张三被告李四借款未还",
             messages=[],
             llm=None,
             retrieve_fn=retrieve,
@@ -62,6 +89,7 @@ class TestOrchestrator(unittest.TestCase):
             skills=[],
         )
         self.assertTrue(calls)
+        self.assertEqual(calls[0][1], ("law", "case"))
         self.assertEqual(result["agent"], "text_analysis")
         self.assertNotIn("合同法", result["visible_text"])
         self.assertNotIn("【法规】", result["visible_text"])
@@ -70,6 +98,113 @@ class TestOrchestrator(unittest.TestCase):
         mcp_ids = [item["id"] for item in caps.get("mcp") or []]
         self.assertIn("legal://law_regulation", mcp_ids)
         self.assertIn("legal://similar_cases", mcp_ids)
+
+    def test_analysis_bubbles_nested_retrieval_citations(self):
+        cite = {
+            "id": "c-law-1",
+            "doc_type": "law",
+            "document_id": "d1",
+            "file_id": "f-law",
+            "title": "民法典",
+            "article": "第六百六十七条",
+            "snippet": "借款合同",
+            "rrf_score": 0.01,
+        }
+
+        def retrieve(query, scopes=None):
+            return {
+                "laws": "民法典第六百六十七条",
+                "cases": "类案A",
+                "law_citations": [cite],
+                "case_citations": [],
+            }
+
+        result = run_orchestrate(
+            user_text="请结合法规和类案分析民间借贷纠纷，原告张三被告李四借款未还",
+            messages=[],
+            llm=None,
+            retrieve_fn=retrieve,
+            file_service=None,
+            skills=[],
+        )
+        self.assertEqual(result["agent"], "text_analysis")
+        self.assertIn("legal_retrieval", result.get("subcalls_used", []))
+        cites = result.get("citations") or []
+        self.assertEqual(len(cites), 1)
+        self.assertEqual(cites[0]["file_id"], "f-law")
+        self.assertEqual(cites[0]["title"], "民法典")
+
+    def test_doc_writing_bubbles_nested_retrieval_citations(self):
+        cite = {
+            "id": "c-law-2",
+            "doc_type": "law",
+            "document_id": "d2",
+            "file_id": "f-doc",
+            "title": "民事诉讼法",
+            "article": "",
+            "snippet": "起诉状",
+            "rrf_score": 0.02,
+        }
+
+        def retrieve(query, scopes=None):
+            return {
+                "laws": "民事诉讼法",
+                "cases": "",
+                "law_citations": [cite],
+                "case_citations": [],
+            }
+
+        result = run_orchestrate(
+            user_text="请生成民间借贷纠纷起诉状，原告张三，被告李四，借款10万元。",
+            messages=[],
+            llm=None,
+            retrieve_fn=retrieve,
+            file_service=None,
+            skills=[],
+        )
+        self.assertEqual(result["agent"], "doc_writing")
+        self.assertIn("legal_retrieval", result.get("subcalls_used", []))
+        cites = result.get("citations") or []
+        self.assertEqual(len(cites), 1)
+        self.assertEqual(cites[0]["file_id"], "f-doc")
+
+    def test_chitchat_does_not_call_retrieve(self):
+        calls = []
+
+        def retrieve(query, scopes=None):
+            calls.append(query)
+            return {"laws": "x", "cases": "y"}
+
+        result = run_orchestrate(
+            user_text="你好",
+            messages=[],
+            llm=None,
+            retrieve_fn=retrieve,
+            file_service=None,
+            skills=[],
+        )
+        self.assertFalse(calls)
+        self.assertEqual(result.get("plan", {}).get("intent"), "chitchat")
+        self.assertTrue((result.get("visible_text") or "").strip())
+
+    def test_law_search_scopes_law_only(self):
+        calls = []
+
+        def retrieve(query, scopes=None):
+            calls.append(tuple(scopes or ()))
+            return {"laws": "劳动合同法第六十四条", "cases": ""}
+
+        result = run_orchestrate(
+            user_text="检索劳动合同法第64条",
+            messages=[],
+            llm=None,
+            retrieve_fn=retrieve,
+            file_service=None,
+            skills=[],
+        )
+        self.assertEqual(result["agent"], "legal_retrieval")
+        self.assertEqual(calls, [("law",)])
+        self.assertIn("劳动合同法", result.get("visible_text") or "")
 
     def test_analysis_uses_skill_internally_not_as_reply(self):
         captured = {}

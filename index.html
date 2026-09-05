@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind（MCP）</title>
-  <link rel="stylesheet" href="index.css">
+  <link rel="stylesheet" href="index.css?v=20260905contact">
 </head>
 <body>
   <header class="navbar">
-    <div class="logo">LegalMind</div>
+    <button type="button" class="logo" id="navLogoBtn" title="返回首页" aria-label="返回首页">LegalMind</button>
     <nav class="nav-links">
       <button type="button" id="navLoginBtn" hidden>登录</button>
       <button type="button" id="navAdminBtn" hidden>管理后台</button>
@@ -18,11 +18,45 @@
           <span class="nav-user-caret" aria-hidden="true">▾</span>
         </button>
         <div id="navUserDropdown" class="nav-user-dropdown" hidden role="menu">
+          <button type="button" id="navContactBtn" role="menuitem">联系我们</button>
           <button type="button" id="navLogoutBtn" role="menuitem">退出</button>
         </div>
       </div>
     </nav>
   </header>
+  <div id="contactModal" class="contact-modal" hidden>
+    <div class="contact-modal-backdrop" data-close-contact="1"></div>
+    <div class="contact-modal-panel" role="dialog" aria-modal="true" aria-labelledby="contactModalTitle">
+      <div class="contact-modal-header">
+        <h3 id="contactModalTitle">联系我们</h3>
+        <button type="button" class="contact-modal-close" data-close-contact="1" aria-label="关闭">×</button>
+      </div>
+      <div class="contact-modal-body">
+        <p class="contact-lead">如需产品咨询、技术支持或商务合作，欢迎通过以下方式联系 LegalMind 团队。</p>
+        <dl class="contact-list">
+          <div>
+            <dt>电话</dt>
+            <dd><a href="tel:13800008888">138-0000-8888</a></dd>
+          </div>
+          <div>
+            <dt>邮箱</dt>
+            <dd><a href="mailto:support@legalmind.cn">support@legalmind.cn</a></dd>
+          </div>
+          <div>
+            <dt>微信</dt>
+            <dd>LegalMind_Support</dd>
+          </div>
+          <div>
+            <dt>工作时间</dt>
+            <dd>工作日 09:00–18:00</dd>
+          </div>
+        </dl>
+      </div>
+      <div class="contact-modal-footer">
+        <button type="button" class="contact-modal-ok" data-close-contact="1">知道了</button>
+      </div>
+    </div>
+  </div>
   <main>
     <iframe id="mainFrame" src="home.html" frameborder="0"></iframe>
   </main>
@@ -82,6 +116,9 @@
       }
     }
 
+    document.getElementById('navLogoBtn').onclick = function () {
+      loadPage('home.html');
+    };
     document.getElementById('navLoginBtn').onclick = function () {
       loadPage('login.html?next=home.html');
     };
@@ -98,19 +135,42 @@
       dropdown.hidden = !open;
       userBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     };
+    function closeContactModal() {
+      const modal = document.getElementById('contactModal');
+      if (modal) modal.hidden = true;
+    }
+
+    function openContactModal() {
+      closeUserMenu();
+      const modal = document.getElementById('contactModal');
+      if (modal) modal.hidden = false;
+    }
+
+    document.getElementById('navContactBtn').onclick = function (e) {
+      e.stopPropagation();
+      openContactModal();
+    };
     document.getElementById('navLogoutBtn').onclick = async function () {
       closeUserMenu();
       if (window.LegalMindAuth) await LegalMindAuth.logout();
       syncShellNav();
       loadPage('home.html');
     };
+    document.getElementById('contactModal').addEventListener('click', function (e) {
+      if (e.target && e.target.getAttribute && e.target.getAttribute('data-close-contact')) {
+        closeContactModal();
+      }
+    });
     document.addEventListener('click', function (e) {
       const menu = document.getElementById('navUserMenu');
       if (!menu || menu.hidden) return;
       if (!menu.contains(e.target)) closeUserMenu();
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape') closeUserMenu();
+      if (e.key === 'Escape') {
+        closeContactModal();
+        closeUserMenu();
+      }
     });
     syncShellNav();
     if (window.LegalMindAuth && LegalMindAuth.getToken()) {

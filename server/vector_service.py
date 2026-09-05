@@ -15,7 +15,7 @@ os.environ.setdefault('HF_HUB_OFFLINE', '0')  # 默认允许在线，但会在�
 os.environ.setdefault('TRANSFORMERS_VERBOSITY', 'error')
 os.environ.setdefault('HF_HUB_DOWNLOAD_TIMEOUT', '300')
 from sentence_transformers import SentenceTransformer
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import hashlib
 
 class VectorService:
@@ -115,7 +115,148 @@ class VectorService:
         except Exception as e:
             print(f"[VectorService] 错误：无法创建集合: {e}")
             raise
-    
+
+        self.fts = None
+
+    def attach_fts(self, db_path: str) -> None:
+        """Attach SQLite FTS5 index (same kb.db) for hybrid retrieval sync."""
+        from kb_fts import FTS_SCHEMA_VERSION, KbFtsIndex
+
+        self.fts = KbFtsIndex(db_path)
+        self.fts.ensure_schema()
+        # Schema v3+: title UNINDEXED + body_idx; rebuild when version missing or stale.
+        if self.fts.get_schema_version() < FTS_SCHEMA_VERSION:
+            out = self.rebuild_fts_from_chroma()
+            if out.get("ok"):
+                self.fts.set_schema_version(FTS_SCHEMA_VERSION)
+
+    @staticmethod
+    def _title_from_meta(meta: Optional[Dict]) -> str:
+        if not isinstance(meta, dict):
+            return ""
+        return (meta.get("law_name") or meta.get("title") or "").strip()
+
+    @classmethod
+    def _title_matches_hint(cls, title: str, hint: str) -> bool:
+        t = (title or "").strip()
+        h = (hint or "").strip()
+        if not t or not h:
+            return False
+        if h in t or t in h:
+            return True
+        # Soft: compare without trailing 法/条例等
+        for suffix in ("条例", "规定", "办法", "法"):
+            if h.endswith(suffix) and len(h) > len(suffix):
+                stem = h[: -len(suffix)]
+                if stem and stem in t:
+                    return True
+        return False
+
+    def _boost_title_matches(self, query: str, hits: List[Dict]) -> List[Dict]:
+        """When query names a law, keep only title-matching hits (fallback if none)."""
+        if not hits:
+            return hits
+        try:
+            from kb_query_parse import extract_law_name_hint
+        except Exception:
+            return hits
+        hint = extract_law_name_hint(query)
+        if not hint:
+            return hits
+
+        def rrf(h: Dict) -> float:
+            try:
+                return float(h.get("rrf_score") or 0.0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        matched = [
+            h
+            for h in hits
+            if self._title_matches_hint(self._title_from_meta(h.get("metadata") or {}), hint)
+            or self._title_matches_hint((h.get("title") or "").strip(), hint)
+        ]
+        if matched:
+            # Hard filter: drop unrelated statutes when at least one title matches
+            return sorted(matched, key=rrf, reverse=True)
+
+        # Fallback: soft boost only (avoid empty results on bad metadata)
+        def score(h: Dict) -> Tuple[float, float]:
+            t = self._title_from_meta(h.get("metadata") or {}) or (h.get("title") or "")
+            bonus = 1.0 if self._title_matches_hint(t, hint) else 0.0
+            return (bonus, rrf(h))
+
+        return sorted(hits, key=score, reverse=True)
+
+    def rebuild_fts_from_chroma(self) -> Dict:
+        """Full rebuild of FTS from current Chroma collection contents."""
+        if not self.fts:
+            return {"ok": False, "error": "fts not attached"}
+        try:
+            data = self.collection.get(include=["documents", "metadatas"])
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        ids = (data or {}).get("ids") or []
+        documents = (data or {}).get("documents") or []
+        metadatas = (data or {}).get("metadatas") or []
+        try:
+            self.fts.clear()
+            rows = []
+            for i, chunk_id in enumerate(ids):
+                if not chunk_id:
+                    continue
+                meta = metadatas[i] if i < len(metadatas) and metadatas[i] else {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                body = documents[i] if i < len(documents) else ""
+                rows.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "document_id": meta.get("document_id") or "",
+                        "doc_type": meta.get("doc_type") or "",
+                        "body": body or "",
+                        "title": self._title_from_meta(meta),
+                    }
+                )
+            self.fts.upsert_chunks(rows)
+            return {"ok": True, "chunks": len(rows)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _sync_fts_for_chunks(
+        self,
+        document_id: str,
+        chunk_ids: List[str],
+        chunks: List[str],
+        metadata: Optional[Dict],
+    ) -> None:
+        if not self.fts:
+            return
+        if len(chunk_ids) != len(chunks):
+            print(
+                f"[VectorService] FTS sync skipped: ids/chunks length mismatch "
+                f"({len(chunk_ids)} vs {len(chunks)})"
+            )
+            return
+        doc_type = (metadata or {}).get("doc_type") or ""
+        title = self._title_from_meta(metadata)
+        rows = []
+        for chunk_id, body in zip(chunk_ids, chunks):
+            rows.append(
+                {
+                    "chunk_id": chunk_id,
+                    "document_id": document_id,
+                    "doc_type": doc_type,
+                    "body": body,
+                    "title": title,
+                }
+            )
+        try:
+            self.fts.delete_by_document_id(document_id)
+            self.fts.upsert_chunks(rows)
+        except Exception as exc:
+            print(f"[VectorService] FTS sync failed: {exc}")
+
     def _generate_embedding(self, text: str) -> List[float]:
         """
         生成文本的向量嵌入
@@ -226,6 +367,8 @@ class VectorService:
                 documents=documents,
                 metadatas=metadatas
             )
+
+            self._sync_fts_for_chunks(document_id, ids, chunks, metadata)
             
             return {
                 "success": True,
@@ -241,15 +384,54 @@ class VectorService:
                 "error": str(e)
             }
     
-    def search(self, query: str, n_results: int = 5, boost_keywords: bool = True, where: Optional[Dict] = None) -> List[Dict]:
+    @staticmethod
+    def _fts_filters_from_where(where: Optional[Dict]):
         """
-        搜索相似文档
+        Extract simple doc_type/document_id filters for FTS.
+        Returns (ok, doc_type, document_id). ok=False means skip FTS (complex where).
+        """
+        if where is None:
+            return True, None, None
+        if not isinstance(where, dict):
+            return False, None, None
+        if any(str(k).startswith("$") for k in where):
+            return False, None, None
+        doc_type = None
+        document_id = None
+        for k, v in where.items():
+            if isinstance(v, (dict, list)):
+                return False, None, None
+            if k == "doc_type":
+                doc_type = v
+            elif k == "document_id":
+                document_id = v
+            else:
+                return False, None, None
+        return True, doc_type, document_id
+
+    def search(
+        self,
+        query: str,
+        n_results: int = 5,
+        boost_keywords: bool = True,
+        where: Optional[Dict] = None,
+        hybrid: bool = True,
+        k_vec: Optional[int] = None,
+        k_lex: Optional[int] = None,
+        rrf_k: int = 60,
+    ) -> List[Dict]:
+        """
+        搜索相似文档（可选向量 + FTS5 RRF 混合）
         
         Args:
             query: 查询文本
             n_results: 返回结果数量
             boost_keywords: 是否对包含查询关键词的结果进行boost（提升排名）
             where: 可选的元数据过滤条件（传给 ChromaDB query）
+            hybrid: 是否启用 FTS + RRF（FTS 不可用时自动降级纯向量）
+            k_vec: 向量路召回条数
+            k_lex: 词法路召回条数
+            rrf_k: RRF 常数
             
         Returns:
             相似文档列表
@@ -279,6 +461,23 @@ class VectorService:
                     query_keywords.append("合同法")
                 if "民法典" in query:
                     query_keywords.append("民法典")
+                # Hybrid: weaken pure article/digit keyword boost (FTS handles those);
+                # keep law-name string boosts.
+                if hybrid:
+                    def _is_article_or_digit_kw(kw: str) -> bool:
+                        if re.fullmatch(r"\d+", kw):
+                            return True
+                        if re.fullmatch(r"[一二三四五六七八九十百千零〇]+", kw):
+                            return True
+                        if re.fullmatch(
+                            r"第[一二三四五六七八九十百千零〇\d]+条", kw
+                        ):
+                            return True
+                        return False
+
+                    query_keywords = [
+                        k for k in query_keywords if not _is_article_or_digit_kw(k)
+                    ]
             
             # #region agent log
             log_path = os.path.expanduser('/Users/kanglinlin/Documents/cursor/AI法官/.cursor/debug.log')
@@ -331,10 +530,19 @@ class VectorService:
                 pass
             # #endregion
             
-            # 如果启用关键词boost，需要查询更多结果以确保包含关键词的结果能被boost到前面
+            # 如果启用关键词boost或混合检索，需要查询更多结果
             # 查询数量 = 请求数量 * 2，但至少10个，最多50个
-            query_n_results = max(min(n_results * 2, 50), 10) if boost_keywords else n_results
-            
+            if k_vec is not None:
+                query_n_results = max(1, int(k_vec))
+            elif hybrid:
+                query_n_results = max(min(n_results * 2, 50), 10)
+            else:
+                query_n_results = max(min(n_results * 2, 50), 10) if boost_keywords else n_results
+            resolved_k_lex = (
+                max(1, int(k_lex))
+                if k_lex is not None
+                else max(min(n_results * 2, 50), 10)
+            )
             kwargs = dict(query_embeddings=[query_embedding], n_results=query_n_results)
             if where:
                 kwargs["where"] = where
@@ -434,11 +642,83 @@ class VectorService:
                 
                 # 根据adjusted_distance重新排序（包含关键词的结果会排到前面）
                 formatted_results.sort(key=lambda x: x.get('adjusted_distance') if x.get('adjusted_distance') is not None else (x.get('distance') if x.get('distance') is not None else float('inf')))
-                
-                # 如果启用了boost，只返回前n_results个结果（因为查询了更多结果用于boost）
-                if boost_keywords and len(formatted_results) > n_results:
-                    formatted_results = formatted_results[:n_results]
-            
+
+            # --- Hybrid RRF (optional) ---
+            do_hybrid = bool(hybrid and self.fts)
+            fts_doc_type = None
+            fts_document_id = None
+            if do_hybrid:
+                ok, fts_doc_type, fts_document_id = self._fts_filters_from_where(where)
+                if not ok:
+                    print(
+                        "[VectorService] FTS skipped: complex where not supported "
+                        f"for lexical path ({where!r})"
+                    )
+                    do_hybrid = False
+
+            if do_hybrid:
+                fts_hits: List[Dict] = []
+                try:
+                    fts_hits = self.fts.search(
+                        query,
+                        doc_type=fts_doc_type,
+                        document_id=fts_document_id,
+                        limit=resolved_k_lex,
+                    )
+                except Exception as exc:
+                    print(f"[VectorService] FTS search failed, fallback vector-only: {exc}")
+                    do_hybrid = False
+
+            if do_hybrid:
+                from kb_fts import rrf_fuse
+
+                for i, hit in enumerate(formatted_results, start=1):
+                    hit["vector_rank"] = i
+                vec_by_id = {h["id"]: h for h in formatted_results}
+                fts_by_id = {h["chunk_id"]: h for h in fts_hits}
+                fused = rrf_fuse(
+                    [
+                        [h["id"] for h in formatted_results],
+                        [h["chunk_id"] for h in fts_hits],
+                    ],
+                    rrf_k=int(rrf_k) if rrf_k is not None else 60,
+                )
+                merged: List[Dict] = []
+                for cid, score in fused:
+                    if cid in vec_by_id:
+                        hit = dict(vec_by_id[cid])
+                        hit["rrf_score"] = score
+                        fts_h = fts_by_id.get(cid)
+                        hit["fts_rank"] = fts_h.get("fts_rank") if fts_h else None
+                        merged.append(hit)
+                    else:
+                        fts_h = fts_by_id[cid]
+                        fts_title = (fts_h.get("title") or "").strip()
+                        meta = {
+                            "document_id": fts_h.get("document_id"),
+                            "doc_type": fts_h.get("doc_type"),
+                        }
+                        if fts_title:
+                            meta["title"] = fts_title
+                        merged.append(
+                            {
+                                "id": cid,
+                                "document": fts_h.get("body") or "",
+                                "metadata": meta,
+                                "distance": None,
+                                "rrf_score": score,
+                                "vector_rank": None,
+                                "fts_rank": fts_h.get("fts_rank"),
+                            }
+                        )
+                merged = self._boost_title_matches(query, merged)
+                return merged[: max(1, int(n_results))]
+
+            # 纯向量路径（含 hybrid 降级）：扩召回后始终截断到 n_results
+            formatted_results = self._boost_title_matches(query, formatted_results)
+            if len(formatted_results) > n_results:
+                formatted_results = formatted_results[:n_results]
+
             return formatted_results
             
         except Exception as e:
@@ -464,16 +744,28 @@ class VectorService:
             if results['ids']:
                 # 删除所有chunk
                 self.collection.delete(ids=results['ids'])
+                deleted_count = len(results['ids'])
+                chroma_ok = True
+            else:
+                deleted_count = 0
+                chroma_ok = False
+
+            if self.fts:
+                try:
+                    self.fts.delete_by_document_id(document_id)
+                except Exception as exc:
+                    print(f"[VectorService] FTS delete failed: {exc}")
+
+            if chroma_ok:
                 return {
                     "success": True,
-                    "deleted_count": len(results['ids']),
-                    "message": f"已删除文档 {document_id} 的 {len(results['ids'])} 个文本块"
+                    "deleted_count": deleted_count,
+                    "message": f"已删除文档 {document_id} 的 {deleted_count} 个文本块"
                 }
-            else:
-                return {
-                    "success": False,
-                    "message": f"未找到文档 {document_id}"
-                }
+            return {
+                "success": False,
+                "message": f"未找到文档 {document_id}"
+            }
                 
         except Exception as e:
             print(f"[VectorService] 删除文档失败: {e}")

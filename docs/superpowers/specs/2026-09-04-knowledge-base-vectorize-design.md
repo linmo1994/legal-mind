@@ -135,6 +135,7 @@
 | `issuing_authority` | 发布机关 |
 | `document_number` | 文号 |
 | `effective_date` | 施行日期 |
+| `validity` | 状态：`有效` / `失效`（可手动改；默认 `有效`） |
 
 **案例 `doc_type=case`**
 
@@ -146,6 +147,18 @@
 | `case_no` | 案号 |
 | `judges` | 审判人员 |
 | `case_kind` | 案例类型：`ordinary` 普通案例 / `guiding` 指导案例 |
+| `validity` | 状态：`有效` / `失效`（可手动改；默认 `有效`） |
+
+**要素文书 `doc_type=template`**
+
+| 字段 | 中文 |
+|------|------|
+| `template_name` | 文书全称（含案由，如「民间借贷纠纷起诉状」；上传文件名可作为回落） |
+| `document_type` | 文书类型：`起诉状` / `答辩状` / `申请书` |
+| `case_category` | 案件类型：`民事` / `刑事` / `行政` |
+| `validity` | 状态：`有效` / `失效`（可手动改；默认 `有效`） |
+
+说明：`validity` 为业务有效性，与入库流水线 `status`（processing / ready / …）相互独立。
 
 检索 API：**所有** 面向法规或案例的查询必须带 `where`（或等价过滤）限制 `doc_type`。
 
@@ -220,6 +233,7 @@ LLM 抽取：独立可测的 prompt + JSON schema 校验模块（法规/案例�
 | LLM 配置 | 复用；抽取用较低温度 + JSON |
 | `admin_cases` / 客户 | **无数据耦合** |
 | Orchestrator `legal_retrieval` | 本设计不强制改造；后续可将 mock 换为按 `doc_type` 的向量检索 |
+| `legal://doc_template` | **已改为**从知识库 `doc_type=template` 匹配要素文书正文（不再使用 MCP MOCK 模板） |
 
 ---
 

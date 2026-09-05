@@ -15,9 +15,7 @@
   </style>
 </head>
 <body class="admin-body" data-admin-page="hub">
-  <div class="admin-wrap admin-wrap--wide">
-    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
-    <div id="adminSubnav"></div>
+  <div class="admin-wrap admin-wrap--wide">    <div id="adminSubnav"></div>
     <h1>概览</h1>
     <p class="muted">权限、案件与工具的规模一览。点击卡片可进入对应二级菜单。</p>
     <p id="statsStatus" class="muted" hidden></p>
@@ -59,6 +57,32 @@
       </div>
     </section>
 
+    <section class="stats-section" aria-labelledby="kbStatsTitle">
+      <h2 id="kbStatsTitle">知识库管理</h2>
+      <div class="stats-grid">
+        <a class="stats-card" href="admin_kb_laws.html" data-page="admin_kb_laws.html">
+          <div class="stats-label">法规库</div>
+          <div class="stats-value" id="statLaws">—</div>
+          <div class="stats-hint" id="statLawsHint">向量库文档（暂含两类）</div>
+        </a>
+        <a class="stats-card" href="admin_kb_cases.html" data-page="admin_kb_cases.html">
+          <div class="stats-label">裁判案例库</div>
+          <div class="stats-value" id="statCasesKb">—</div>
+          <div class="stats-hint" id="statCasesKbHint">向量库文档（暂含两类）</div>
+        </a>
+        <a class="stats-card" href="admin_kb_templates.html" data-page="admin_kb_templates.html">
+          <div class="stats-label">要素文书</div>
+          <div class="stats-value" id="statTemplates">—</div>
+          <div class="stats-hint">最高院要素式模板</div>
+        </a>
+        <a class="stats-card" href="vectorize.html" data-page="vectorize.html">
+          <div class="stats-label">向量调试</div>
+          <div class="stats-value" id="statVectorDebug">—</div>
+          <div class="stats-hint">底层向量工具</div>
+        </a>
+      </div>
+    </section>
+
     <section class="stats-section" aria-labelledby="toolsStatsTitle">
       <h2 id="toolsStatsTitle">工具管理</h2>
       <div class="stats-grid">
@@ -71,16 +95,6 @@
           <div class="stats-label">MCP</div>
           <div class="stats-value" id="statMcp">—</div>
           <div class="stats-hint" id="statMcpHint">已接入的 MCP 服务</div>
-        </a>
-        <a class="stats-card" href="admin_kb_laws.html" data-page="admin_kb_laws.html">
-          <div class="stats-label">法规库</div>
-          <div class="stats-value" id="statLaws">—</div>
-          <div class="stats-hint" id="statLawsHint">含法规与案例</div>
-        </a>
-        <a class="stats-card" href="admin_kb_cases.html" data-page="admin_kb_cases.html">
-          <div class="stats-label">裁判案例库</div>
-          <div class="stats-value" id="statCasesKb">—</div>
-          <div class="stats-hint" id="statCasesKbHint">含法规与案例</div>
         </a>
       </div>
     </section>
@@ -120,7 +134,11 @@
         const docCount = data.document_count != null ? data.document_count : '—';
         document.getElementById('statLaws').textContent = docCount;
         document.getElementById('statCasesKb').textContent = docCount;
-        let docHint = '含法规与案例';
+        const tpl = document.getElementById('statTemplates');
+        if (tpl) tpl.textContent = docCount;
+        const dbg = document.getElementById('statVectorDebug');
+        if (dbg) dbg.textContent = docCount;
+        let docHint = '向量库文档（暂含两类）';
         if (data.chunk_count != null && data.chunk_count !== data.document_count) {
           docHint += '（分块 ' + data.chunk_count + '）';
         }

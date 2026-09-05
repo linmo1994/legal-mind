@@ -12,263 +12,6 @@ import uuid
 
 # 模拟数据存储
 MOCK_DATA = {
-    "legal_doc_templates": {
-        "民间借贷纠纷起诉状": """民事起诉状
-
-原告：{plaintiff_name}，{plaintiff_info}
-被告：{defendant_name}，{defendant_info}
-
-诉讼请求：
-1. 请求判令被告偿还原告借款本金人民币{loan_amount}元；
-2. 请求判令被告支付自{loan_date}起至实际清偿之日止的利息，按年利率{interest_rate}%计算；
-3. 请求判令被告承担本案诉讼费用。
-
-事实与理由：
-{case_description}
-
-此致
-{court_name}
-
-具状人：{plaintiff_name}
-{date}""",
-        "离婚协议书": """离婚协议书
-
-甲方：{husband_name}，{husband_info}
-乙方：{wife_name}，{wife_info}
-
-双方于{marriage_date}登记结婚，现因{divorce_reason}，双方自愿离婚，经协商一致，达成如下协议：
-
-一、子女抚养
-{child_custody}
-
-二、财产分割
-{property_division}
-
-三、债务处理
-{debt_handling}
-
-本协议一式三份，双方各执一份，婚姻登记机关存档一份。
-
-甲方签字：{husband_name}
-乙方签字：{wife_name}
-日期：{date}""",
-        "劳动合同": """劳动合同
-
-甲方（用人单位）：{employer_name}
-地址：{employer_address}
-法定代表人：{employer_legal_rep}
-
-乙方（劳动者）：{employee_name}
-身份证号：{employee_id}
-住址：{employee_address}
-
-根据《中华人民共和国劳动法》及相关法律法规，甲乙双方经平等协商，自愿签订本合同。
-
-一、合同期限
-合同期限自{start_date}至{end_date}，共{contract_period}。
-
-二、工作内容和工作地点
-1. 乙方同意根据甲方工作需要，担任{position}职务。
-2. 工作地点：{work_location}
-
-三、工作时间和休息休假
-1. 工作时间：{work_hours}
-2. 休息休假：按国家规定执行
-
-四、劳动报酬
-1. 月工资：人民币{monthly_salary}元
-2. 支付方式：{payment_method}
-
-五、社会保险
-甲乙双方按国家规定缴纳社会保险。
-
-六、其他约定
-{other_terms}
-
-甲方（盖章）：{employer_name}
-乙方（签字）：{employee_name}
-日期：{date}""",
-        "房屋租赁合同": """房屋租赁合同
-
-出租方（甲方）：{landlord_name}
-身份证号：{landlord_id}
-地址：{landlord_address}
-
-承租方（乙方）：{tenant_name}
-身份证号：{tenant_id}
-地址：{tenant_address}
-
-根据《中华人民共和国合同法》及相关法律法规，甲乙双方就房屋租赁事宜，经协商一致，签订本合同。
-
-一、租赁房屋基本情况
-房屋地址：{property_address}
-房屋面积：{property_area}平方米
-房屋用途：{property_usage}
-
-二、租赁期限
-租赁期限自{start_date}至{end_date}，共{lease_period}。
-
-三、租金及支付方式
-1. 月租金：人民币{monthly_rent}元
-2. 支付方式：{payment_method}
-3. 押金：人民币{deposit}元
-
-四、双方权利义务
-{rights_obligations}
-
-五、违约责任
-{breach_terms}
-
-六、其他约定
-{other_terms}
-
-甲方（签字）：{landlord_name}
-乙方（签字）：{tenant_name}
-日期：{date}""",
-        "买卖合同": """买卖合同
-
-卖方（甲方）：{seller_name}
-地址：{seller_address}
-法定代表人：{seller_legal_rep}
-
-买方（乙方）：{buyer_name}
-地址：{buyer_address}
-法定代表人：{buyer_legal_rep}
-
-根据《中华人民共和国合同法》及相关法律法规，甲乙双方就买卖事宜，经协商一致，签订本合同。
-
-一、标的物
-名称：{item_name}
-规格：{item_spec}
-数量：{item_quantity}
-质量：{item_quality}
-
-二、价款及支付方式
-总价款：人民币{total_price}元
-支付方式：{payment_method}
-
-三、交付时间及地点
-交付时间：{delivery_time}
-交付地点：{delivery_location}
-
-四、质量保证
-{quality_guarantee}
-
-五、违约责任
-{breach_terms}
-
-六、其他约定
-{other_terms}
-
-甲方（盖章）：{seller_name}
-乙方（盖章）：{buyer_name}
-日期：{date}""",
-        "借款合同": """借款合同
-
-出借人（甲方）：{lender_name}
-身份证号：{lender_id}
-地址：{lender_address}
-
-借款人（乙方）：{borrower_name}
-身份证号：{borrower_id}
-地址：{borrower_address}
-
-根据《中华人民共和国合同法》及相关法律法规，甲乙双方就借款事宜，经协商一致，签订本合同。
-
-一、借款金额
-借款金额：人民币{loan_amount}元（大写：{loan_amount_cn}）
-
-二、借款期限
-借款期限自{start_date}至{end_date}，共{loan_period}。
-
-三、借款利率
-年利率：{interest_rate}%
-
-四、还款方式
-{repayment_method}
-
-五、担保方式
-{guarantee_method}
-
-六、违约责任
-{breach_terms}
-
-七、其他约定
-{other_terms}
-
-甲方（签字）：{lender_name}
-乙方（签字）：{borrower_name}
-日期：{date}""",
-        "保证合同": """保证合同
-
-债权人（甲方）：{creditor_name}
-地址：{creditor_address}
-
-债务人（乙方）：{debtor_name}
-地址：{debtor_address}
-
-保证人（丙方）：{guarantor_name}
-身份证号：{guarantor_id}
-地址：{guarantor_address}
-
-根据《中华人民共和国担保法》及相关法律法规，为保障甲方债权的实现，丙方自愿为乙方提供保证担保，经协商一致，签订本合同。
-
-一、主债权
-主债权金额：人民币{principal_amount}元
-主债权期限：{principal_period}
-
-二、保证方式
-保证方式：{guarantee_type}
-
-三、保证范围
-保证范围包括：主债权、利息、违约金、损害赔偿金及实现债权的费用。
-
-四、保证期间
-保证期间：{guarantee_period}
-
-五、其他约定
-{other_terms}
-
-甲方（签字）：{creditor_name}
-乙方（签字）：{debtor_name}
-丙方（签字）：{guarantor_name}
-日期：{date}""",
-        "委托合同": """委托合同
-
-委托人（甲方）：{principal_name}
-地址：{principal_address}
-
-受托人（乙方）：{agent_name}
-地址：{agent_address}
-
-根据《中华人民共和国合同法》及相关法律法规，甲乙双方就委托事宜，经协商一致，签订本合同。
-
-一、委托事项
-{entrustment_matters}
-
-二、委托权限
-{entrustment_authority}
-
-三、委托期限
-委托期限自{start_date}至{end_date}。
-
-四、委托费用
-委托费用：人民币{entrustment_fee}元
-支付方式：{payment_method}
-
-五、双方权利义务
-{rights_obligations}
-
-六、违约责任
-{breach_terms}
-
-七、其他约定
-{other_terms}
-
-甲方（签字）：{principal_name}
-乙方（签字）：{agent_name}
-日期：{date}"""
-    },
     "law_regulations": {
         "民法典311条": """《中华人民共和国民法典》第三百一十一条
 
@@ -442,6 +185,7 @@ class MCPServer:
             elif self._vector_service_instance[0]:
                 print("[MCP Server] ✅ 向量化服务初始化成功（30秒内完成）")
                 self.vector_service = self._vector_service_instance[0]
+                self._attach_fts_if_ready()
             else:
                 print("[MCP Server] ⚠️  警告：向量化服务初始化返回None，跳过")
                 self.vector_service = None
@@ -488,7 +232,7 @@ class MCPServer:
             {
                 "uri": "legal://doc_template",
                 "name": "法律文书模板",
-                "description": "检索法律文书模板：根据模板名称获取对应的法律文书空模板及占位符说明，用于后续生成完整文书。",
+                "description": "从知识库要素文书检索模板：按模板名称匹配已入库的要素式法律文书正文，用于后续生成完整文书。",
                 "mimeType": "text/plain"
             },
             {
@@ -579,6 +323,25 @@ class MCPServer:
             }
         }
     
+    def _attach_fts_if_ready(self) -> None:
+        """Mount KbFtsIndex on vector_service when both vs and kb_store are ready."""
+        if not self.vector_service or not self.kb_store:
+            return
+        try:
+            self.vector_service.attach_fts(self.kb_store.db_path)
+        except Exception as e:
+            print(f"[MCP Server] FTS attach failed: {e}")
+            return
+        try:
+            fts = getattr(self.vector_service, "fts", None)
+            if fts and fts.count() == 0:
+                chroma_n = self.vector_service.collection.count()
+                if chroma_n and int(chroma_n) > 0:
+                    print("[MCP Server] FTS empty, rebuilding from Chroma...")
+                    print(self.vector_service.rebuild_fts_from_chroma())
+        except Exception as e:
+            print(f"[MCP Server] FTS rebuild skipped: {e}")
+
     def _init_tools(self) -> List[Dict]:
         """初始化工具列表"""
         tools = []
@@ -593,6 +356,7 @@ class MCPServer:
                         if self._vector_service_instance[0]:
                             print("[MCP Server] ✅ 检测到后台初始化完成，启用向量化服务")
                             self.vector_service = self._vector_service_instance[0]
+                            self._attach_fts_if_ready()
                         elif self._vector_service_init_error[0]:
                             print(f"[MCP Server] ⚠️  后台初始化失败: {self._vector_service_init_error[0]}")
         
@@ -745,6 +509,7 @@ class MCPServer:
                         if self._vector_service_instance[0]:
                             print("[MCP Server] ✅ 检测到后台初始化完成，启用向量化服务")
                             self.vector_service = self._vector_service_instance[0]
+                            self._attach_fts_if_ready()
                         elif self._vector_service_init_error[0]:
                             return self._error_response(
                                 request_id, 
@@ -1042,14 +807,27 @@ class MCPServer:
                 uri = "legal://contract_review_rules"
         
         if uri == "legal://doc_template":
-            # 支持 template_name 和 document_type 两种参数名
+            # 支持 template_name 和 document_type 两种参数名；内容来自知识库要素文书
             template_name = arguments.get("template_name") or arguments.get("document_type") or ""
             print(f"[DEBUG] 文档模板查询 - template_name: {template_name}, arguments: {arguments}")
-            
-            # 首先尝试精确匹配
-            if template_name in MOCK_DATA["legal_doc_templates"]:
-                template = MOCK_DATA["legal_doc_templates"][template_name]
-                print(f"[DEBUG] 精确匹配成功: {template_name}")
+            try:
+                from kb_template_resolve import resolve_template_text
+
+                text, matched, available = resolve_template_text(
+                    template_name,
+                    kb_store=getattr(self, "kb_store", None),
+                    file_service=getattr(self, "file_service", None),
+                    vector_service=getattr(self, "vector_service", None),
+                )
+            except Exception as exc:
+                print(f"[DEBUG] 知识库模板解析失败: {exc}")
+                return self._error_response(
+                    request_id, -32603, f"知识库模板读取失败: {exc}"
+                )
+
+            if text:
+                label = matched or template_name
+                print(f"[DEBUG] 知识库模板命中: {label}")
                 return {
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -1058,72 +836,25 @@ class MCPServer:
                             {
                                 "uri": uri,
                                 "mimeType": "text/plain",
-                                "text": template
+                                "text": text,
                             }
                         ]
-                    }
+                    },
                 }
-            
-            # 如果精确匹配失败，尝试模糊匹配
-            template_name_lower = template_name.lower()
-            matched_template = None
-            matched_key = None
-            
-            # 尝试多种匹配方式
-            for key in MOCK_DATA["legal_doc_templates"].keys():
-                key_lower = key.lower()
-                # 检查是否包含关键信息
-                if "民间借贷" in template_name or "private_lending" in template_name_lower or "civil_complaint" in template_name_lower:
-                    if "民间借贷" in key and "起诉" in key:
-                        matched_template = MOCK_DATA["legal_doc_templates"][key]
-                        matched_key = key
-                        print(f"[DEBUG] 模糊匹配成功: {template_name} -> {key}")
-                        break
-                elif "离婚" in template_name or "divorce" in template_name_lower:
-                    if "离婚" in key:
-                        matched_template = MOCK_DATA["legal_doc_templates"][key]
-                        matched_key = key
-                        print(f"[DEBUG] 模糊匹配成功: {template_name} -> {key}")
-                        break
-                elif "劳动" in template_name or "labor" in template_name_lower:
-                    if "劳动" in key and "合同" in key:
-                        matched_template = MOCK_DATA["legal_doc_templates"][key]
-                        matched_key = key
-                        print(f"[DEBUG] 模糊匹配成功: {template_name} -> {key}")
-                        break
-                elif "租赁" in template_name or "rent" in template_name_lower:
-                    if "租赁" in key:
-                        matched_template = MOCK_DATA["legal_doc_templates"][key]
-                        matched_key = key
-                        print(f"[DEBUG] 模糊匹配成功: {template_name} -> {key}")
-                        break
-                # 通用匹配：检查关键词是否在模板名称中
-                elif any(term in key_lower for term in template_name_lower.split() if len(term) > 1):
-                    matched_template = MOCK_DATA["legal_doc_templates"][key]
-                    matched_key = key
-                    print(f"[DEBUG] 通用模糊匹配成功: {template_name} -> {key}")
-                    break
-            
-            if matched_template:
-                return {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": {
-                        "contents": [
-                            {
-                                "uri": uri,
-                                "mimeType": "text/plain",
-                                "text": matched_template
-                            }
-                        ]
-                    }
-                }
+
+            if available:
+                avail = "、".join(available[:30])
+                msg = (
+                    f"未在知识库要素文书中找到匹配模板：{template_name or '（未指定）'}\n"
+                    f"当前可用模板：{avail}"
+                )
             else:
-                # 返回友好的错误提示，列出可用的模板
-                available_templates = list(MOCK_DATA["legal_doc_templates"].keys())
-                return self._error_response(request_id, -32602, 
-                    f"Template not found: {template_name}\n\n可用的模板包括：{', '.join(available_templates)}")
-        
+                msg = (
+                    f"未在知识库要素文书中找到匹配模板：{template_name or '（未指定）'}\n"
+                    "当前知识库无可用要素文书，请先在管理端「要素文书」上传模板。"
+                )
+            return self._error_response(request_id, -32602, msg)
+
         elif uri == "legal://law_regulation":
             # 从多个可能的位置提取query参数
             query = ""
@@ -3546,8 +3277,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     with lock:
                         if server._vector_service_instance[0]:
                             server.vector_service = server._vector_service_instance[0]
+                            server._attach_fts_if_ready()
                 elif getattr(server, "_vector_service_instance", [None])[0]:
                     server.vector_service = server._vector_service_instance[0]
+                    server._attach_fts_if_ready()
         api.vector_service = server.vector_service
         api.file_service = server.file_service
 

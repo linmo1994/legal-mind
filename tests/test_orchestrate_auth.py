@@ -28,9 +28,16 @@ class TestOrchestrateAuth(unittest.TestCase):
         self.assertEqual(st, 401)
 
     def test_no_case_id(self):
+        # 案件可选：有律所级 cap.chat 即可编排
         st, body = self.api.check_orchestrate_access(self.hdr, {"user_text": "hi"})
-        self.assertEqual(st, 400)
-        self.assertIn("case_id", body["error"])
+        self.assertEqual(st, 200)
+        self.assertIsNone(body.get("case_id"))
+
+    def test_invalid_case_id(self):
+        st, body = self.api.check_orchestrate_access(
+            self.hdr, {"case_id": 999999, "user_text": "hi"}
+        )
+        self.assertEqual(st, 404)
 
     def test_director_ok(self):
         case = self.store.create_case("B-1", "案", created_by=1)

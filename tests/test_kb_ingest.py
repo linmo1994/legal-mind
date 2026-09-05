@@ -5,10 +5,17 @@ from vector_service import VectorService
 
 
 class FakeFileService:
-    def __init__(self, mapping):
+    def __init__(self, mapping, names=None):
         self.mapping = mapping
+        self.names = names or {}
+
     def get_file_text(self, file_id):
         return self.mapping.get(file_id)
+
+    def get_file(self, file_id):
+        if file_id not in self.mapping and file_id not in self.names:
+            return None
+        return {"original_name": self.names.get(file_id, file_id)}
 
 
 class TestKbIngest(unittest.TestCase):
@@ -26,6 +33,33 @@ class TestKbIngest(unittest.TestCase):
     def test_title_from_meta(self):
         self.assertEqual(title_from_meta("law", {"law_name": "民法典"}, "x"), "民法典")
         self.assertEqual(title_from_meta("case", {"case_no": "", "cause_of_action": "劳动争议"}, "x"), "劳动争议")
+        self.assertEqual(
+            title_from_meta("template", {"template_name": "民事起诉状"}, "x"),
+            "民事起诉状",
+        )
+
+    def test_ingest_template_uses_full_filename_as_name(self):
+        files = FakeFileService(
+            {"f_tpl": "要素式起诉状模板正文 …" * 5},
+            names={"f_tpl": "民间借贷纠纷起诉状.docx"},
+        )
+
+        def fake(system, user):
+            self.assertIn("民间借贷纠纷起诉状", user)
+            return '{"template_name":"起诉状","document_type":"起诉状","case_category":"民事"}'
+
+        doc = ingest_uploaded_file(
+            doc_type="template",
+            file_id="f_tpl",
+            created_by="u1",
+            kb_store=self.kb,
+            file_service=files,
+            vector_service=self.vs,
+            complete_fn=fake,
+        )
+        self.assertEqual(doc["status"], "ready")
+        self.assertEqual(doc["meta"]["template_name"], "民间借贷纠纷起诉状")
+        self.assertEqual(doc["title"], "民间借贷纠纷起诉状")
 
     def test_ingest_happy_path(self):
         def fake(system, user):

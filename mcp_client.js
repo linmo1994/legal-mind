@@ -1950,7 +1950,7 @@ function getResourceParameters(uri) {
       properties: {
         template_name: {
           type: 'string',
-          description: '必填，法律文书模板名称，例如 \'民间借贷纠纷起诉状\'、\'离婚协议书\'。'
+          description: '必填，知识库要素文书名称（含案由全称），例如 \'民间借贷纠纷起诉状\'。'
         }
       },
       required: ['template_name']
@@ -4210,24 +4210,21 @@ async function loadActiveCaseOptions() {
   }
   if (!resp.ok) throw new Error('cases HTTP ' + resp.status);
   const data = await resp.json();
-  const current = LegalMindAuth.getCaseId();
   sel.innerHTML = '<option value="">请选择案件…</option>';
   (data.cases || []).forEach(function (c) {
     const opt = document.createElement('option');
     opt.value = String(c.id);
     opt.textContent = (c.case_no || '') + ' · ' + (c.title || '') +
       (c.status_label ? ('（' + c.status_label + '）') : '');
-    if (current != null && String(current) === String(c.id)) opt.selected = true;
     sel.appendChild(opt);
   });
+  // 默认不选中任何案件，需用户主动下拉选择
+  sel.value = '';
+  LegalMindAuth.setCaseId(null);
   sel.onchange = function () {
     const v = sel.value ? parseInt(sel.value, 10) : null;
     LegalMindAuth.setCaseId(v);
   };
-  if (!sel.value && sel.options.length > 1) {
-    sel.selectedIndex = 1;
-    LegalMindAuth.setCaseId(parseInt(sel.value, 10));
-  }
 }
 
 function tryHandleOrchestrate(fullUserMessage) {
@@ -4286,6 +4283,10 @@ function tryHandleOrchestrate(fullUserMessage) {
       } else {
         shell.content.hidden = false;
         shell.content.textContent = answer;
+      }
+      const citations = collectOrchestrateCitations(data);
+      if (citations.length && shell.content) {
+        renderOrchestrateCitations(shell.content, citations);
       }
       if (data.artifact && data.artifact.file_id) {
         addOrchestrateDownload(data.artifact);
@@ -4574,6 +4575,74 @@ function addOrchestrateProgressShell() {
   return { wrap: messageDiv, flowSlot: flowSlot, content: contentDiv, answer: answerEl };
 }
 
+function collectOrchestrateCitations(data) {
+  if (!data || typeof data !== 'object') return [];
+  if (Array.isArray(data.citations) && data.citations.length) return data.citations;
+  const nested = data.data && typeof data.data === 'object' ? data.data : null;
+  if (nested) {
+    const fromNested = []
+      .concat(Array.isArray(nested.law_citations) ? nested.law_citations : [])
+      .concat(Array.isArray(nested.case_citations) ? nested.case_citations : []);
+    if (fromNested.length) return fromNested;
+  }
+  const top = []
+    .concat(Array.isArray(data.law_citations) ? data.law_citations : [])
+    .concat(Array.isArray(data.case_citations) ? data.case_citations : []);
+  return top;
+}
+
+function renderOrchestrateCitations(container, citations) {
+  if (!container || !citations || !citations.length) return;
+  const prev = container.querySelector('.cite-list');
+  if (prev) prev.remove();
+  const list = document.createElement('div');
+  list.className = 'cite-list';
+  const label = document.createElement('div');
+  label.className = 'cite-list-label';
+  label.textContent = '引用';
+  list.appendChild(label);
+  const seen = {};
+  citations.forEach(function (c) {
+    if (!c || typeof c !== 'object') return;
+    const title = (c.title || '文献').trim() || '文献';
+    const article = (c.article || '').trim();
+    const fileId = c.file_id || '';
+    const docId = c.document_id || '';
+    const dedupeKey = [fileId, docId, title, article].join('|');
+    if (seen[dedupeKey]) return;
+    seen[dedupeKey] = true;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cite-link';
+    btn.textContent = article ? (title + ' ' + article) : title;
+    if (!fileId) {
+      btn.disabled = true;
+      btn.title = '未关联源文件';
+    } else {
+      btn.onclick = function () {
+        try {
+          getChatFilePreview()
+            .open(fileId, title, { article: article })
+            .catch(function (err) {
+              console.warn('citation preview failed', err);
+              if (typeof updateStatus === 'function') {
+                updateStatus(err && err.message ? err.message : '预览失败', 'error');
+              }
+            });
+        } catch (err) {
+          console.warn('citation preview unavailable', err);
+        }
+      };
+    }
+    list.appendChild(btn);
+  });
+  if (list.children.length <= 1) return;
+  container.appendChild(list);
+  if (elements.chatMessages) {
+    elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+  }
+}
+
 function paintOrchestrateFlow(slot, flow, visibleCount, runningIndex) {
   if (!slot) return;
   slot.innerHTML = '';
@@ -4741,9 +4810,10 @@ function addFileMessageCard(fileInfo) {
   const actionsDiv = document.createElement('div');
   actionsDiv.className = 'file-actions';
   
-  // 在线预览按钮
+  // 在线预览按钮 → 页内浮层
   const previewBtn = document.createElement('button');
   previewBtn.className = 'file-action-btn preview-btn';
+  previewBtn.type = 'button';
   previewBtn.innerHTML = `
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
@@ -4751,69 +4821,11 @@ function addFileMessageCard(fileInfo) {
     </svg>
     查看预览
   `;
-  previewBtn.onclick = () => {
+  previewBtn.onclick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     previewFile(fileInfo.file_id, fileInfo.original_name);
   };
-  
-  // 添加鼠标悬停预览功能
-  let previewTooltipTimeout = null;
-  let currentTooltip = null;
-  let hideTooltipTimer = null;
-  
-  previewBtn.addEventListener('mouseenter', async () => {
-    console.log('鼠标进入"查看预览"按钮，准备获取文件内容...');
-    // 进入按钮时，取消可能存在的隐藏定时器
-    if (hideTooltipTimer) {
-      clearTimeout(hideTooltipTimer);
-      hideTooltipTimer = null;
-    }
-    // 延迟显示，避免快速移动鼠标时频繁触发
-    previewTooltipTimeout = setTimeout(async () => {
-      try {
-        console.log('开始获取文件内容，fileId:', fileInfo.file_id);
-        // 获取文件内容
-        const fileContent = await getFileContentForPreview(fileInfo.file_id);
-        console.log('获取文件内容结果:', fileContent ? `有内容(${fileContent.length}字符)` : '无内容');
-        if (fileContent) {
-          currentTooltip = showFilePreviewTooltip(previewBtn, fileContent, fileInfo.original_name);
-          console.log('✅ 文件预览气泡已显示');
-        } else {
-          console.warn('⚠️ 文件没有文字内容，无法显示预览');
-        }
-      } catch (error) {
-        console.error('❌ 获取文件内容失败:', error);
-      }
-    }, 300); // 300ms延迟
-  });
-  
-  previewBtn.addEventListener('mouseleave', (e) => {
-    // 清除延迟
-    if (previewTooltipTimeout) {
-      clearTimeout(previewTooltipTimeout);
-      previewTooltipTimeout = null;
-    }
-    
-    const tooltip = document.querySelector('.file-preview-tooltip');
-    const toEl = e.relatedTarget;
-    // 如果鼠标是从按钮移动到气泡内部，则不隐藏
-    if (tooltip && toEl && tooltip.contains(toEl)) {
-      console.log('鼠标从按钮进入气泡，保持显示');
-      return;
-    }
-    // 延迟隐藏，给鼠标移动到气泡上的时间（更长一点，避免用户移动慢时被误隐藏）
-    if (tooltip) {
-      if (hideTooltipTimer) clearTimeout(hideTooltipTimer);
-      hideTooltipTimer = setTimeout(() => {
-        const tooltipElement = document.querySelector('.file-preview-tooltip');
-        if (tooltipElement && !tooltipElement.matches(':hover')) {
-          hideFilePreviewTooltip(tooltipElement);
-          currentTooltip = null;
-          console.log('隐藏文件预览气泡');
-        }
-        hideTooltipTimer = null;
-      }, 350);
-    }
-  });
   
   // 下载按钮
   const downloadBtn = document.createElement('button');
@@ -4846,121 +4858,65 @@ function addFileMessageCard(fileInfo) {
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
 }
 
-// 预览文件
+// 对话页文件预览浮层（复用知识库 KbFilePreview）
+let chatFilePreview = null;
+
+function getChatFilePreview() {
+  if (chatFilePreview) return chatFilePreview;
+  if (!window.KbFilePreview || typeof window.KbFilePreview.create !== 'function') {
+    throw new Error('预览组件未加载');
+  }
+  chatFilePreview = window.KbFilePreview.create({
+    rootId: 'chatFileViewer',
+    getBase: function () {
+      return (CONFIG && CONFIG.mcpServerUrl) || 'http://localhost:8001';
+    },
+    authHeaders: function () {
+      if (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders) {
+        return LegalMindAuth.authHeaders();
+      }
+      return {};
+    },
+    esc: function (v) {
+      return typeof escapeHtml === 'function' ? escapeHtml(v) : String(v == null ? '' : v);
+    },
+    api: async function (path) {
+      const base = (CONFIG && CONFIG.mcpServerUrl) || 'http://localhost:8001';
+      const headers =
+        typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders
+          ? LegalMindAuth.authHeaders()
+          : {};
+      const resp = await fetch(base + path, { headers });
+      const data = await resp.json().catch(function () { return {}; });
+      if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+      return data;
+    }
+  });
+  return chatFilePreview;
+}
+
+// 预览文件：页内浮层（不再新开标签 / 悬停下拉气泡）
 async function previewFile(fileId, fileName) {
   try {
-    console.log(`开始预览文件: ${fileName} (${fileId})`);
-    
-    const mcpServerUrl = CONFIG.mcpServerUrl || 'http://localhost:8000';
-    const previewUrl = `${mcpServerUrl}/api/files/${fileId}/preview`;
-    
-    console.log('预览URL:', previewUrl);
-    
-    // 显示预览提示
     updateStatus('正在加载文件预览...', 'connecting');
-    
-    // 根据文件类型选择预览方式
-    const fileExtension = fileName.split('.').pop()?.toLowerCase() || '';
-    const previewableTypes = ['pdf', 'png', 'jpg', 'jpeg', 'gif', 'webp', 'txt', 'html', 'htm', 'svg'];
-    const officeTypes = ['docx', 'doc', 'xlsx', 'xls', 'pptx', 'ppt'];
-    
-    if (previewableTypes.includes(fileExtension)) {
-      // 浏览器可以直接预览的文件类型（PDF、图片、文本等）
-      console.log('文件类型可直接预览，在新窗口打开');
-      const previewWindow = window.open(previewUrl, '_blank');
-      
-      if (!previewWindow) {
-        showError('预览窗口被阻止，请允许弹窗后重试');
-        updateStatus('预览失败', 'disconnected');
-        return;
-      }
-      
-      // 监听窗口加载完成
-      previewWindow.addEventListener('load', () => {
-        console.log('✅ 文件预览窗口已打开');
-        updateStatus('文件预览已打开', 'connected');
-      });
-      
-      setTimeout(() => {
-        updateStatus('文件预览已打开', 'connected');
-      }, 1000);
-      
-    } else if (officeTypes.includes(fileExtension)) {
-      // Office文件（DOCX、XLSX等），浏览器无法直接预览
-      // 方案1：尝试使用Microsoft Office Online Viewer（如果可用）
-      // 方案2：提示用户下载后打开，或使用本地Office应用
-      console.log('Office文件类型，尝试使用在线预览或提示下载');
-      
-      // 先尝试直接打开（某些浏览器可能支持）
-      const previewWindow = window.open(previewUrl, '_blank');
-      
-      if (!previewWindow) {
-        showError('预览窗口被阻止，请允许弹窗后重试');
-        updateStatus('预览失败', 'disconnected');
-        return;
-      }
-      
-      // 延迟检查窗口状态
-      setTimeout(() => {
-        try {
-          // 检查窗口是否仍然打开（如果文件被下载，窗口可能会关闭）
-          if (previewWindow.closed) {
-            console.log('预览窗口已关闭，可能已触发下载');
-            updateStatus('文件已下载，请使用Office应用打开', 'connected');
-            // 提示用户
-            setTimeout(() => {
-              alert('提示：Office文件（DOCX/XLSX等）无法在浏览器中直接预览。\n\n文件已在新标签页中打开，如果浏览器无法显示，请：\n1. 下载文件后使用Office应用打开\n2. 或使用Microsoft Office Online查看');
-            }, 500);
-          } else {
-            updateStatus('文件预览已打开', 'connected');
-          }
-        } catch (e) {
-          // 跨域检查可能失败，忽略
-          console.log('无法检查窗口状态（可能是跨域限制）');
-          updateStatus('文件预览已打开', 'connected');
-        }
-      }, 2000);
-      
-    } else {
-      // 其他文件类型，尝试直接打开
-      console.log('未知文件类型，尝试直接打开');
-      const previewWindow = window.open(previewUrl, '_blank');
-      
-      if (!previewWindow) {
-        showError('预览窗口被阻止，请允许弹窗后重试');
-        updateStatus('预览失败', 'disconnected');
-        return;
-      }
-      
-      setTimeout(() => {
-        updateStatus('文件预览已打开', 'connected');
-      }, 1000);
-    }
-    
-    console.log(`✅ 文件预览已触发: ${fileName}`);
-    
+    // 关掉可能残留的旧气泡
+    const tip = document.querySelector('.file-preview-tooltip');
+    if (tip) tip.remove();
+    await getChatFilePreview().open(fileId, fileName);
+    updateStatus('文件预览已打开', 'connected');
   } catch (error) {
     console.error('预览文件失败:', error);
-    console.error('错误详情:', {
-      fileId: fileId,
-      fileName: fileName,
-      error: error.message,
-      stack: error.stack
-    });
-    
-    // 恢复状态
     updateStatus('预览失败', 'disconnected');
-    
-    // 显示错误提示
     let errorMessage = '预览文件失败';
-    if (error.message.includes('404')) {
-      errorMessage = '文件不存在，可能已被删除';
-    } else if (error.message.includes('网络') || error.message.includes('fetch')) {
-      errorMessage = '网络连接失败，请检查网络设置';
-    } else if (error.message) {
-      errorMessage = `预览失败: ${error.message}`;
+    if (error && error.message) {
+      if (String(error.message).includes('404')) {
+        errorMessage = '文件不存在，可能已被删除';
+      } else if (String(error.message).includes('网络') || String(error.message).includes('fetch')) {
+        errorMessage = '网络连接失败，请检查网络设置';
+      } else {
+        errorMessage = '预览失败: ' + error.message;
+      }
     }
-    
     showError(errorMessage);
   }
 }

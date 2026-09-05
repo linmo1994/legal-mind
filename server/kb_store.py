@@ -7,7 +7,7 @@ import sqlite3
 import time
 from typing import Any, Dict, List, Optional
 
-DOC_TYPES = ("law", "case")
+DOC_TYPES = ("law", "case", "template")
 STATUSES = (
     "processing",
     "ready",

@@ -1,5 +1,5 @@
 // 首页功能实现
-const HOME_JS_VERSION = '2026.09.04-rbac';
+const HOME_JS_VERSION = '2026.09.05-casebar';
 console.log(`[HOME] home.js loaded, version=${HOME_JS_VERSION}`);
 let selectedFiles = [];
 let uploadedFileIds = []; // 存储已上传的文件ID映射 {fileIndex: fileId}
@@ -10,6 +10,44 @@ function canOpenAdmin() {
     || LegalMindAuth.hasPerm('cap.user_manage')
     || LegalMindAuth.hasPerm('cap.case_manage')
     || LegalMindAuth.hasPerm('cap.role_manage');
+}
+
+async function loadHomeCaseOptions() {
+  const sel = document.getElementById('homeActiveCaseSelect');
+  if (!sel || typeof LegalMindAuth === 'undefined' || !LegalMindAuth.getToken()) return;
+  let mcpServerUrl = 'http://localhost:8001';
+  try {
+    const configData = await loadConfigCached();
+    if (configData && configData.mcp_server) {
+      mcpServerUrl = `http://${configData.mcp_server.host}:${configData.mcp_server.port}`;
+    }
+  } catch (e) {
+    console.warn('加载配置失败，使用默认 MCP 地址', e);
+  }
+  const resp = await fetch(`${mcpServerUrl}/api/admin/cases`, {
+    headers: LegalMindAuth.authHeaders()
+  });
+  if (resp.status === 401) {
+    LegalMindAuth.requireLogin('login.html?next=index.html');
+    return;
+  }
+  if (!resp.ok) throw new Error('cases HTTP ' + resp.status);
+  const data = await resp.json();
+  sel.innerHTML = '<option value="">请选择案件…</option>';
+  (data.cases || []).forEach(function (c) {
+    const opt = document.createElement('option');
+    opt.value = String(c.id);
+    opt.textContent = (c.case_no || '') + ' · ' + (c.title || '') +
+      (c.status_label ? ('（' + c.status_label + '）') : '');
+    sel.appendChild(opt);
+  });
+  // 默认不选中任何案件，需用户主动下拉选择
+  sel.value = '';
+  LegalMindAuth.setCaseId(null);
+  sel.onchange = function () {
+    const v = sel.value ? parseInt(sel.value, 10) : null;
+    LegalMindAuth.setCaseId(v);
+  };
 }
 
 function syncAdminEntry() {
@@ -175,6 +213,11 @@ document.addEventListener('DOMContentLoaded', function() {
   syncAdminEntry();
   if (window.LegalMindAuth && LegalMindAuth.getToken()) {
     LegalMindAuth.fetchMe().then(syncAdminEntry).catch(function () { syncAdminEntry(); });
+    loadHomeCaseOptions().catch(function (e) {
+      console.warn('加载案件列表失败', e);
+    });
+  } else {
+    syncAdminEntry();
   }
 
   // 文件上传按钮点击

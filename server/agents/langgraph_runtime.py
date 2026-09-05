@@ -75,6 +75,8 @@ def run_langgraph(
                 skills=state.get("skills") or [],
                 write_llm=write_llm,
                 template_fn=template_fn,
+                retrieval_scopes=(state.get("plan") or {}).get("retrieval_scopes"),
+                intent=(state.get("plan") or {}).get("intent"),
             )
             trace = list(state.get("trace") or [])
             for item in _trace_from_result(agent_name, last):

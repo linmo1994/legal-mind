@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind - 智能法律助手</title>
-  <link rel="stylesheet" href="home.css">
+  <link rel="stylesheet" href="home.css?v=20260905casetools">
 </head>
 <body>
   <div class="home-container">
@@ -44,7 +44,15 @@
               placeholder="请输入您的问题或需求，例如：帮我检索劳动合同法第64条..."
               rows="4"
             ></textarea>
-            <button id="homeFileUploadBtn" class="btn-icon-float btn-icon-left" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
+            <div class="composer-tools">
+              <button id="homeFileUploadBtn" class="btn-icon-float btn-icon-left" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
+              <div class="composer-case-bar" title="当前办案上下文">
+                <label for="homeActiveCaseSelect" class="sr-only">案件</label>
+                <select id="homeActiveCaseSelect" aria-label="选择案件">
+                  <option value="" selected>请选择案件…</option>
+                </select>
+              </div>
+            </div>
             <button id="homeSendBtn" class="btn-send-float" title="发送">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
@@ -98,7 +106,7 @@
   </div>
 
   <script src="auth.js"></script>
-  <script src="home.js?v=20260904rbac"></script>
+  <script src="home.js?v=20260905casetools"></script>
   <script>
     // 更新MCP状态显示
     function updateMCPStatus(status, text) {

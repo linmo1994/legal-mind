@@ -7,6 +7,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from auth_service import AuthService
 from http_rbac_api import StatusPayload, _deny, _ok, extract_bearer
 from kb_ingest import ingest_uploaded_file
+from kb_meta_extract import (
+    normalize_case_meta,
+    normalize_law_meta,
+    normalize_template_meta,
+)
 from kb_store import DOC_TYPES, KbStore
 from rbac_service import RbacService
 
@@ -216,6 +221,13 @@ class KbHttpApi:
         if meta is not None:
             if not isinstance(meta, dict):
                 return _deny(400, "meta 必须为对象")
+            doc_type = existing.get("doc_type")
+            if doc_type == "law":
+                meta = normalize_law_meta(meta)
+            elif doc_type == "case":
+                meta = normalize_case_meta(meta)
+            elif doc_type == "template":
+                meta = normalize_template_meta(meta)
             kwargs["meta"] = meta
 
         # Chroma first, then SQLite — avoid leaving store updated if Chroma hard-fails.

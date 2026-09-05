@@ -38,18 +38,128 @@ def _contents_text(resp: Dict[str, Any]) -> str:
     return "\n".join(c.get("text") or "" for c in contents if isinstance(c, dict))
 
 
-def make_retrieve_fn(mcp_server):
-    def retrieve(query: str) -> Dict[str, Any]:
-        law = mcp_server._handle_resource_read(0, {
-            "uri": "legal://law_regulation",
-            "arguments": {"query": query},
-        })
-        case = mcp_server._handle_resource_read(0, {
-            "uri": "legal://similar_cases",
-            "arguments": {"case_description": query, "query": query},
-        })
-        return {"laws": _contents_text(law), "cases": _contents_text(case)}
+def format_kb_hits(hits: list, *, limit: int = 5) -> str:
+    parts = []
+    for hit in (hits or [])[:limit]:
+        meta = hit.get("metadata") or {}
+        title = (meta.get("title") or meta.get("law_name") or meta.get("case_no") or "").strip()
+        doc = (hit.get("document") or hit.get("text") or "").strip()
+        if not doc and not title:
+            continue
+        head = f"《{title}》" if title else "（未命名片段）"
+        snippet = doc[:800] + ("…" if len(doc) > 800 else "")
+        parts.append(f"{head}\n{snippet}")
+    return "\n\n".join(parts)
+
+
+def hits_to_citations(hits: list, query: str = "") -> list:
+    """Convert vector/FTS search hits into structured citation dicts.
+
+    Dedupes by (file_id|document_id|title) + article so one law+article
+    yields a single link even when multiple chunks match.
+    """
+    try:
+        from kb_query_parse import extract_articles
+    except Exception:
+        extract_articles = None  # type: ignore
+
+    query_articles = extract_articles(query) if extract_articles else []
+    query_article = query_articles[0] if query_articles else None
+    out = []
+    seen = set()
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        doc = (hit.get("document") or hit.get("text") or "").strip()
+        title = (
+            meta.get("title") or meta.get("law_name") or meta.get("case_no") or ""
+        ).strip()
+        article = query_article
+        if not article and extract_articles and doc:
+            found = extract_articles(doc)
+            article = found[0] if found else None
+        file_id = meta.get("file_id") or None
+        document_id = meta.get("document_id") or ""
+        dedupe_key = (
+            f"{file_id or ''}|{document_id}|{title}|{article or ''}"
+        )
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        rrf = hit.get("rrf_score")
+        try:
+            rrf_score = float(rrf) if rrf is not None else None
+        except (TypeError, ValueError):
+            rrf_score = None
+        out.append(
+            {
+                "id": hit.get("id") or "",
+                "doc_type": meta.get("doc_type") or "",
+                "document_id": document_id,
+                "file_id": file_id,
+                "title": title,
+                "article": article,
+                "snippet": doc[:400],
+                "rrf_score": rrf_score,
+            }
+        )
+    return out
+
+
+def make_kb_retrieve_fn(mcp_server):
+    """Retrieve from knowledge-base vectors with doc_type scopes (law/case)."""
+
+    def _vector():
+        vs = getattr(mcp_server, "vector_service", None)
+        if vs:
+            return vs
+        inst = getattr(mcp_server, "_vector_service_instance", None)
+        if isinstance(inst, (list, tuple)) and inst and inst[0]:
+            mcp_server.vector_service = inst[0]
+            return inst[0]
+        return None
+
+    def retrieve(query: str, scopes=None) -> Dict[str, Any]:
+        scopes = [s for s in (scopes or ["law", "case"]) if s in ("law", "case")]
+        if not scopes:
+            scopes = ["law", "case"]
+        out: Dict[str, Any] = {
+            "laws": "",
+            "cases": "",
+            "law_citations": [],
+            "case_citations": [],
+        }
+        vs = _vector()
+        if not vs:
+            return out
+        q = (query or "").strip() or "法律"
+        if "law" in scopes:
+            try:
+                hits = vs.search(q, n_results=5, boost_keywords=True, where={"doc_type": "law"})
+            except Exception as exc:
+                hits = []
+                print(f"[kb_retrieve] law search failed: {exc}")
+            out["laws"] = format_kb_hits(hits)
+            out["law_citations"] = hits_to_citations(hits, q)
+        if "case" in scopes:
+            try:
+                hits = vs.search(q, n_results=5, boost_keywords=True, where={"doc_type": "case"})
+            except Exception as exc:
+                hits = []
+                print(f"[kb_retrieve] case search failed: {exc}")
+            out["cases"] = format_kb_hits(hits)
+            out["case_citations"] = hits_to_citations(hits, q)
+        return out
+
     return retrieve
+
+
+def make_retrieve_fn(mcp_server):
+    """Prefer knowledge-base vector retrieval; keep mock resources as unused fallback API."""
+    return make_kb_retrieve_fn(mcp_server)
 
 
 def load_full_config() -> Dict[str, Any]:

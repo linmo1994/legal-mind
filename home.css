@@ -359,6 +359,54 @@ body::before {
   gap: 16px;
 }
 
+.composer-tools {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 120px);
+}
+
+.composer-case-bar {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.composer-case-bar .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.composer-case-bar select {
+  min-width: 148px;
+  max-width: 240px;
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(44, 106, 158, 0.28);
+  border-radius: var(--radius-md);
+  background: #fff;
+  color: #0f172a;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+}
+.composer-case-bar select:focus {
+  outline: none;
+  border-color: rgba(44, 106, 158, 0.55);
+  box-shadow: 0 0 0 3px rgba(44, 106, 158, 0.12);
+}
+
 .input-container {
   position: relative;
   overflow: visible; /* 允许气泡显示，文件列表本身有overflow控制 */
@@ -398,8 +446,8 @@ body::before {
 }
 
 .btn-icon-float {
-  position: absolute;
-  bottom: 16px;
+  position: relative;
+  bottom: auto;
   z-index: 10;
   background: #2c6a9e;
   box-shadow: var(--shadow-md);
@@ -415,10 +463,11 @@ body::before {
   justify-content: center;
   width: 44px;
   height: 44px;
+  flex-shrink: 0;
 }
 
 .btn-icon-float.btn-icon-left {
-  left: 16px;
+  left: auto;
 }
 
 .btn-icon-float:hover {
@@ -1077,12 +1126,22 @@ body::before {
     padding: 16px 90px 60px 60px; /* 左侧为文件上传按钮留空间，右侧为发送按钮留空间 */
   }
 
-  .btn-icon-float {
+  .composer-tools {
     bottom: 14px;
     left: 14px;
+    gap: 8px;
+  }
+
+  .btn-icon-float {
     width: 40px;
     height: 40px;
     font-size: 1.1rem;
+  }
+
+  .composer-case-bar select {
+    height: 40px;
+    min-width: 130px;
+    max-width: 180px;
   }
 
   .btn-send-float {

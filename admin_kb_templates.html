@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>裁判案例库 - LegalMind</title>
+  <title>要素文书 - LegalMind</title>
   <link rel="stylesheet" href="admin.css">
   <style>
     .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; font-size: 13px; }
@@ -44,10 +44,10 @@
     .search-results .sr-snippet { white-space: pre-wrap; word-break: break-word; color: #111827; }
   </style>
 </head>
-<body class="admin-body" data-admin-page="kb-cases">
+<body class="admin-body" data-admin-page="kb-templates">
   <div class="admin-wrap admin-wrap--wide">    <div id="adminSubnav"></div>
     <div class="kb-page-title">
-      <h1>裁判案例库</h1>
+      <h1>要素文书</h1>
       <button type="button" class="btn-primary" id="btnUpload">上传</button>
     </div>
     <div class="list-toolbar">
@@ -55,27 +55,24 @@
       <span class="muted" id="listCount" style="margin-left:auto"></span>
     </div>
 
-    <p id="emptyHint" class="muted" hidden>暂无案例文档，请上传文件。</p>
-    <table class="admin-table" id="caseTable" style="width:100%;border-collapse:collapse;background:#fff;" hidden>
+    <p id="emptyHint" class="muted" hidden>暂无要素文书模板，请上传最高院颁布的要素式法律文书模板。</p>
+    <table class="admin-table" id="tplTable" style="width:100%;border-collapse:collapse;background:#fff;" hidden>
       <thead>
         <tr>
-          <th>案号</th>
-          <th>案由</th>
-          <th>法院</th>
-          <th>审理程序</th>
-          <th>案例类型</th>
-          <th>审判人员</th>
+          <th>文书名称</th>
+          <th>文书类型</th>
+          <th>案件类型</th>
           <th>状态</th>
           <th>原文件</th>
           <th></th>
         </tr>
       </thead>
-      <tbody id="caseBody"></tbody>
+      <tbody id="tplBody"></tbody>
     </table>
 
     <h2 style="font-size:16px;margin:28px 0 8px">试检索</h2>
     <div class="search-box">
-      <input type="search" id="searchQuery" placeholder="输入检索关键词，例如：劳动争议 赔偿">
+      <input type="search" id="searchQuery" placeholder="输入检索关键词，例如：民事起诉状 要素">
       <button type="button" class="btn-primary" id="btnSearch">检索</button>
     </div>
     <p id="searchStatus" class="muted"></p>
@@ -93,11 +90,6 @@
     let uploadModal = null;
     const fileNameCache = {};
 
-    const CASE_KIND_LABELS = {
-      ordinary: "普通案例",
-      guiding: "指导案例"
-    };
-
     function dash(v) {
       const s = v == null ? "" : String(v).trim();
       return s ? s : "—";
@@ -107,13 +99,9 @@
       return (doc && doc.meta) || {};
     }
 
-    function caseDisplayName(doc) {
+    function tplName(doc) {
       const m = metaOf(doc);
-      return dash(m.case_no || m.cause_of_action || doc.title);
-    }
-
-    function caseKindLabel(code) {
-      return CASE_KIND_LABELS[code] || dash(code);
+      return dash(m.template_name || doc.title);
     }
 
     function validityLabel(v) {
@@ -152,7 +140,7 @@
     async function uploadFile(file) {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("description", "kb-case");
+      fd.append("description", "kb-template");
       const headers = {};
       const token = LegalMindAuth.getToken();
       if (token) headers.Authorization = "Bearer " + token;
@@ -164,8 +152,8 @@
     }
 
     function renderList() {
-      const tbody = document.getElementById("caseBody");
-      const table = document.getElementById("caseTable");
+      const tbody = document.getElementById("tplBody");
+      const table = document.getElementById("tplTable");
       const empty = document.getElementById("emptyHint");
       document.getElementById("listCount").textContent = "共 " + docs.length + " 条";
       tbody.innerHTML = "";
@@ -175,12 +163,9 @@
         const m = metaOf(doc);
         const tr = document.createElement("tr");
         tr.innerHTML =
-          "<td>" + UI.esc(dash(m.case_no)) + "</td>" +
-          "<td>" + UI.esc(dash(m.cause_of_action)) + "</td>" +
-          "<td>" + UI.esc(dash(m.court)) + "</td>" +
-          "<td>" + UI.esc(dash(m.procedure)) + "</td>" +
-          "<td>" + UI.esc(caseKindLabel(m.case_kind)) + "</td>" +
-          "<td>" + UI.esc(dash(m.judges)) + "</td>" +
+          "<td>" + UI.esc(tplName(doc)) + "</td>" +
+          "<td>" + UI.esc(dash(m.document_type)) + "</td>" +
+          "<td>" + UI.esc(dash(m.case_category)) + "</td>" +
           "<td>" + UI.esc(validityLabel(m.validity)) + "</td>" +
           "<td>" + (doc.file_id
             ? '<button type="button" class="btn-ghost" data-act="file">' +
@@ -218,7 +203,8 @@
           fileNameCache[id] = id.slice(0, 8) + "…";
         }
       }));
-      const tbody = document.getElementById("caseBody");
+      // refresh name labels without full rebind if still same docs
+      const tbody = document.getElementById("tplBody");
       if (!tbody) return;
       docs.forEach(function (doc, idx) {
         if (!doc.file_id) return;
@@ -228,26 +214,30 @@
     }
 
     async function loadList() {
-      const data = await api("/api/admin/kb/documents?doc_type=case");
+      const data = await api("/api/admin/kb/documents?doc_type=template");
       docs = data.items || [];
       renderList();
     }
 
     function editForm(doc) {
       const m = metaOf(doc);
-      const kind = m.case_kind === "guiding" ? "guiding" : "ordinary";
+      const docType = m.document_type || "";
+      const cat = m.case_category || "";
       const validity = validityLabel(m.validity);
-      return '<form class="admin-form form-grid" id="caseForm">' +
+      function opt(val, cur) {
+        return "<option value=\"" + UI.esc(val) + "\"" + (val === cur ? " selected" : "") + ">" + UI.esc(val) + "</option>";
+      }
+      return '<form class="admin-form form-grid" id="tplForm">' +
         "<label>标题</label><input id=\"fTitle\" value=\"" + UI.esc(doc.title || "") + "\">" +
-        "<label>案号</label><input id=\"fCaseNo\" value=\"" + UI.esc(m.case_no || "") + "\">" +
-        "<label>案由</label><input id=\"fCause\" value=\"" + UI.esc(m.cause_of_action || "") + "\">" +
-        "<label>法院</label><input id=\"fCourt\" value=\"" + UI.esc(m.court || "") + "\">" +
-        "<label>审理程序</label><input id=\"fProc\" value=\"" + UI.esc(m.procedure || "") + "\" placeholder=\"如：一审、二审\">" +
-        "<label>案例类型</label><select id=\"fKind\">" +
-          "<option value=\"ordinary\"" + (kind === "ordinary" ? " selected" : "") + ">普通案例</option>" +
-          "<option value=\"guiding\"" + (kind === "guiding" ? " selected" : "") + ">指导案例</option>" +
+        "<label>文书名称</label><input id=\"fName\" value=\"" + UI.esc(m.template_name || "") + "\">" +
+        "<label>文书类型</label><select id=\"fDocType\">" +
+          "<option value=\"\"" + (!docType ? " selected" : "") + ">—</option>" +
+          opt("起诉状", docType) + opt("答辩状", docType) + opt("申请书", docType) +
         "</select>" +
-        "<label>审判人员</label><input id=\"fJudges\" value=\"" + UI.esc(m.judges || "") + "\" placeholder=\"多人用分号分隔\">" +
+        "<label>案件类型</label><select id=\"fCat\">" +
+          "<option value=\"\"" + (!cat ? " selected" : "") + ">—</option>" +
+          opt("民事", cat) + opt("刑事", cat) + opt("行政", cat) +
+        "</select>" +
         "<label>状态</label><select id=\"fValidity\">" +
           "<option value=\"有效\"" + (validity === "有效" ? " selected" : "") + ">有效</option>" +
           "<option value=\"失效\"" + (validity === "失效" ? " selected" : "") + ">失效</option>" +
@@ -256,16 +246,12 @@
     }
 
     function readEditForm() {
-      const kind = document.getElementById("fKind").value;
       return {
         title: document.getElementById("fTitle").value.trim(),
         meta: {
-          case_no: document.getElementById("fCaseNo").value.trim(),
-          cause_of_action: document.getElementById("fCause").value.trim(),
-          court: document.getElementById("fCourt").value.trim(),
-          procedure: document.getElementById("fProc").value.trim(),
-          case_kind: kind === "guiding" ? "guiding" : "ordinary",
-          judges: document.getElementById("fJudges").value.trim(),
+          template_name: document.getElementById("fName").value.trim(),
+          document_type: document.getElementById("fDocType").value.trim(),
+          case_category: document.getElementById("fCat").value.trim(),
           validity: document.getElementById("fValidity").value.trim() || "有效"
         }
       };
@@ -273,7 +259,7 @@
 
     function openEdit(doc) {
       UI.openDrawer({
-        title: "编辑案例元数据",
+        title: "编辑要素文书元数据",
         body: editForm(doc),
         footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
           '<button type="button" class="btn-primary" id="btnSave">保存</button>',
@@ -312,8 +298,8 @@
 
     async function removeDoc(doc) {
       const ok = await UI.confirm({
-        title: "删除案例",
-        message: "确定删除「" + caseDisplayName(doc) + "」？将同步移除向量，此操作不可恢复。",
+        title: "删除要素文书",
+        message: "确定删除「" + tplName(doc) + "」？将同步移除向量，此操作不可恢复。",
         danger: true,
         okText: "删除"
       });
@@ -345,7 +331,7 @@
           report("识别中 / 向量化中 " + label);
           const created = await api("/api/admin/kb/documents", {
             method: "POST",
-            body: JSON.stringify({ doc_type: "case", file_id: fileId })
+            body: JSON.stringify({ doc_type: "template", file_id: fileId })
           });
           if (!created || !created.id) {
             throw new Error("入库响应异常，请重启 MCP 后重试");
@@ -385,13 +371,13 @@
       try {
         const data = await api("/api/admin/kb/search", {
           method: "POST",
-          body: JSON.stringify({ doc_type: "case", query: q, n_results: 8 })
+          body: JSON.stringify({ doc_type: "template", query: q, n_results: 8 })
         });
         const results = data.results || [];
         statusEl.textContent = results.length ? ("命中 " + results.length + " 条") : "无命中";
         results.forEach(function (r) {
           const md = r.metadata || {};
-          const title = md.case_no || md.cause_of_action || md.title || r.id || "—";
+          const title = md.template_name || md.document_type || md.title || r.id || "—";
           const snippet = (r.document || "").slice(0, 400);
           const fileId = md.file_id || "";
           const li = document.createElement("li");
@@ -448,12 +434,12 @@
         api: api,
         authHeaders: function () { return LegalMindAuth.authHeaders(); },
         esc: UI.esc,
-        rootId: "kbCaseFileViewer"
+        rootId: "kbTplFileViewer"
       });
       uploadModal = KbUploadModal.create({
-        rootId: "kbCaseUploadModal",
+        rootId: "kbTplUploadModal",
         title: "添加要上传的文件",
-        hint: "支持 pdf、docx、doc、txt、markdown 等裁判文书；上传后将解析正文、识别元数据并向量化入库。",
+        hint: "支持 pdf、docx、doc、txt、markdown 等最高院要素式法律文书模板；上传后将解析正文、识别元数据并向量化入库。",
         esc: UI.esc,
         onSubmit: async function (files, ctx) {
           await uploadSerial(files, function (text) {

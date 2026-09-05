@@ -24,6 +24,12 @@ def title_from_meta(doc_type: str, meta: dict, fallback: str = "") -> str:
             return case_no
         cause = (meta.get("cause_of_action") or "").strip()
         return cause or fallback
+    if doc_type == "template":
+        name = (meta.get("template_name") or "").strip()
+        if name:
+            return name
+        kind = (meta.get("document_type") or "").strip()
+        return kind or fallback
     return fallback
 
 
@@ -74,16 +80,28 @@ def ingest_uploaded_file(
         raise ValueError(f"invalid doc_type: {doc_type}")
 
     text = file_service.get_file_text(file_id)
+    source_filename = ""
+    get_file = getattr(file_service, "get_file", None)
+    if callable(get_file):
+        info = get_file(file_id) or {}
+        source_filename = (info.get("original_name") or "").strip()
+
     document_id = new_document_id(doc_type)
 
     if not (text or "").strip():
+        meta: dict = {}
+        if doc_type == "template":
+            from kb_meta_extract import refine_template_meta
+
+            meta = refine_template_meta({}, source_filename)
+        title = title_from_meta(doc_type, meta, fallback=source_filename or file_id or "")
         return kb_store.create_document(
             id=document_id,
             doc_type=doc_type,
             file_id=file_id,
-            title=file_id or "",
+            title=title or file_id or "",
             status="extract_failed",
-            meta={},
+            meta=meta,
             created_by=created_by,
         )
 
@@ -97,8 +115,15 @@ def ingest_uploaded_file(
         created_by=created_by,
     )
 
-    meta, meta_status = extract_metadata(doc_type, text, complete_fn=complete_fn)
-    title = title_from_meta(doc_type, meta, fallback=file_id or "")
+    meta, meta_status = extract_metadata(
+        doc_type,
+        text,
+        complete_fn=complete_fn,
+        source_filename=source_filename or None,
+    )
+    title = title_from_meta(
+        doc_type, meta, fallback=source_filename or file_id or ""
+    )
     metadata = chunk_metadata(doc_type, document_id, file_id, title, meta)
 
     result = vector_service.add_document(document_id, text, metadata)

@@ -671,12 +671,16 @@ class RbacHttpApi:
         if gated[0] != 200:
             return gated
         user = gated[1]["user"]
-        case_id = body.get("case_id")
-        if case_id is None or case_id == "":
-            return _deny(400, "业务请求需要 case_id")
-        case_id = int(case_id)
-        if not self.store.get_case(case_id):
-            return _deny(404, "案件不存在")
+        raw_case = body.get("case_id")
+        case_id: Optional[int] = None
+        if raw_case is not None and raw_case != "":
+            try:
+                case_id = int(raw_case)
+            except (TypeError, ValueError):
+                return _deny(400, "case_id 无效")
+            if not self.store.get_case(case_id):
+                return _deny(404, "案件不存在")
+        # 案件为可选项：未选案件时仅校验律所级权限
         if not self.rbac.require(user["id"], "cap.chat", case_id):
             return _deny(403, "无权限：cap.chat")
         text = (body.get("user_text") or body.get("message") or "")

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>知识库 · 法规库 - LegalMind</title>
+  <title>法规库 - LegalMind</title>
   <link rel="stylesheet" href="admin.css">
   <style>
     .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; font-size: 13px; }
@@ -11,8 +11,14 @@
     .form-grid label { display: block; margin: 10px 0 4px; font-size: 13px; }
     .form-grid input { width: 100%; padding: 8px; box-sizing: border-box; }
     .row-actions button { margin-right: 4px; }
-    .list-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+    .list-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0 12px; }
     .list-toolbar .btn-primary[disabled] { opacity: 0.65; cursor: not-allowed; }
+    .kb-page-title {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      margin: 8px 0 4px; flex-wrap: wrap;
+    }
+    .kb-page-title h1 { margin: 0; }
+    .kb-page-title .btn-primary[disabled] { opacity: 0.65; cursor: not-allowed; }
     .status-pill {
       display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
       background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
@@ -26,20 +32,25 @@
       padding: 10px 12px; margin: 0 0 8px; border: 1px solid #e5e7eb; border-radius: 8px;
       background: #f8fafc; font-size: 13px; line-height: 1.5;
     }
-    .search-results .sr-meta { color: #6b7280; font-size: 12px; margin-bottom: 4px; }
+    .search-results .sr-meta { color: #6b7280; font-size: 12px; margin-bottom: 4px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+    .search-results .sr-title-link {
+      background: none; border: none; padding: 0; margin: 0;
+      color: #1a4a6e; cursor: pointer; font: inherit; text-align: left;
+      text-decoration: underline;
+    }
+    .search-results .sr-title-link:disabled {
+      color: #6b7280; cursor: default; text-decoration: none;
+    }
     .search-results .sr-snippet { white-space: pre-wrap; word-break: break-word; color: #111827; }
   </style>
 </head>
 <body class="admin-body" data-admin-page="kb-laws">
-  <div class="admin-wrap admin-wrap--wide">
-    <a class="admin-back" href="home.html" onclick="if(window.parent&&window.parent.loadPage){window.parent.loadPage('home.html');return false;}">返回首页</a>
-    <div id="adminSubnav"></div>
-    <h1>知识库 · 法规库</h1>
-    <p class="muted">上传法规文件入库向量化；可编辑元数据并试检索。空字段显示为 —。</p>
-
+  <div class="admin-wrap admin-wrap--wide">    <div id="adminSubnav"></div>
+    <div class="kb-page-title">
+      <h1>法规库</h1>
+      <button type="button" class="btn-primary" id="btnUpload">上传</button>
+    </div>
     <div class="list-toolbar">
-      <input type="file" id="fileInput" multiple accept=".txt,.doc,.docx,.pdf,.md,text/plain">
-      <button type="button" class="btn-primary" id="btnUpload">上传并入库</button>
       <span class="muted" id="uploadStatus"></span>
       <span class="muted" id="listCount" style="margin-left:auto"></span>
     </div>
@@ -54,6 +65,7 @@
           <th>文号</th>
           <th>施行日期</th>
           <th>状态</th>
+          <th>原文件</th>
           <th></th>
         </tr>
       </thead>
@@ -61,7 +73,6 @@
     </table>
 
     <h2 style="font-size:16px;margin:28px 0 8px">试检索</h2>
-    <p class="muted" style="margin:0 0 8px">限定法规库（doc_type=law）。</p>
     <div class="search-box">
       <input type="search" id="searchQuery" placeholder="输入检索关键词，例如：劳动合同 解除">
       <button type="button" class="btn-primary" id="btnSearch">检索</button>
@@ -72,19 +83,14 @@
   <script src="auth.js"></script>
   <script src="admin_nav.js"></script>
   <script src="admin_ui.js"></script>
+  <script src="admin_kb_files.js"></script>
   <script>
     const UI = window.AdminUI;
     let base = "";
     let docs = [];
-
-    const STATUS_LABELS = {
-      processing: "处理中",
-      ready: "就绪",
-      meta_failed: "元数据识别失败",
-      vector_failed: "向量化失败",
-      extract_failed: "文本提取失败",
-      deleted: "已删除"
-    };
+    let filePreview = null;
+    let uploadModal = null;
+    const fileNameCache = {};
 
     function dash(v) {
       const s = v == null ? "" : String(v).trim();
@@ -100,15 +106,8 @@
       return dash(m.law_name || doc.title);
     }
 
-    function statusLabel(code) {
-      return STATUS_LABELS[code] || code || "—";
-    }
-
-    function statusClass(code) {
-      if (code === "ready") return "status-pill";
-      if (code === "meta_failed" || code === "vector_failed" || code === "extract_failed") return "status-pill err";
-      if (code === "processing") return "status-pill warn";
-      return "status-pill";
+    function validityLabel(v) {
+      return (v === "失效") ? "失效" : "有效";
     }
 
     function setUploadStatus(text) {
@@ -125,10 +124,18 @@
       } else {
         o.headers = Object.assign({}, headers, o.headers);
       }
-      const resp = await fetch(base + path, o);
+      let resp;
+      try {
+        resp = await fetch(base + path, o);
+      } catch (err) {
+        throw new Error("无法连接服务（" + (base || "?") + "）。请确认 MCP 已启动，并硬刷新页面。");
+      }
       const data = await resp.json().catch(function () { return {}; });
       if (resp.status === 401) { LegalMindAuth.requireLogin(); throw new Error("未登录"); }
       if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      if (data && data.jsonrpc && data.error) {
+        throw new Error("知识库接口不可用（服务可能未重启）。请重启 MCP 后重试。");
+      }
       return data;
     }
 
@@ -163,12 +170,13 @@
           "<td>" + UI.esc(dash(m.issuing_authority)) + "</td>" +
           "<td>" + UI.esc(dash(m.document_number)) + "</td>" +
           "<td>" + UI.esc(dash(m.effective_date)) + "</td>" +
-          '<td><span class="' + statusClass(doc.status) + '">' + UI.esc(statusLabel(doc.status)) + "</span></td>" +
+          "<td>" + UI.esc(validityLabel(m.validity)) + "</td>" +
+          "<td>" + (doc.file_id
+            ? '<button type="button" class="btn-ghost" data-act="file">' +
+              UI.esc(fileNameCache[doc.file_id] || "预览") + "</button>"
+            : "—") + "</td>" +
           '<td><div class="row-actions">' +
             '<button type="button" class="btn-ghost" data-act="edit">编辑</button>' +
-            (doc.file_id
-              ? '<button type="button" class="btn-ghost" data-act="file">原文</button>'
-              : "") +
             '<button type="button" class="btn-danger-outline" data-act="del">删除</button>' +
           "</div></td>";
         tr.querySelectorAll("[data-act]").forEach(function (btn) {
@@ -182,6 +190,31 @@
         });
         tbody.appendChild(tr);
       });
+      hydrateFileNames();
+    }
+
+    async function hydrateFileNames() {
+      const ids = [];
+      docs.forEach(function (d) {
+        if (d.file_id && !fileNameCache[d.file_id]) ids.push(d.file_id);
+      });
+      if (!ids.length) return;
+      await Promise.all(ids.map(async function (id) {
+        try {
+          const info = await api("/api/files/" + encodeURIComponent(id));
+          fileNameCache[id] = info.original_name || id;
+        } catch (e) {
+          fileNameCache[id] = id.slice(0, 8) + "…";
+        }
+      }));
+      // refresh name labels without full rebind if still same docs
+      const tbody = document.getElementById("lawBody");
+      if (!tbody) return;
+      docs.forEach(function (doc, idx) {
+        if (!doc.file_id) return;
+        const btn = tbody.rows[idx] && tbody.rows[idx].querySelector('[data-act="file"]');
+        if (btn) btn.textContent = fileNameCache[doc.file_id] || "预览";
+      });
     }
 
     async function loadList() {
@@ -192,6 +225,7 @@
 
     function editForm(doc) {
       const m = metaOf(doc);
+      const validity = validityLabel(m.validity);
       return '<form class="admin-form form-grid" id="lawForm">' +
         "<label>标题</label><input id=\"fTitle\" value=\"" + UI.esc(doc.title || "") + "\">" +
         "<label>法律名称</label><input id=\"fLawName\" value=\"" + UI.esc(m.law_name || "") + "\">" +
@@ -199,6 +233,10 @@
         "<label>发布机关</label><input id=\"fAuth\" value=\"" + UI.esc(m.issuing_authority || "") + "\">" +
         "<label>文号</label><input id=\"fDocNo\" value=\"" + UI.esc(m.document_number || "") + "\">" +
         "<label>施行日期</label><input id=\"fDate\" value=\"" + UI.esc(m.effective_date || "") + "\" placeholder=\"YYYY-MM-DD\">" +
+        "<label>状态</label><select id=\"fValidity\">" +
+          "<option value=\"有效\"" + (validity === "有效" ? " selected" : "") + ">有效</option>" +
+          "<option value=\"失效\"" + (validity === "失效" ? " selected" : "") + ">失效</option>" +
+        "</select>" +
         "</form>";
     }
 
@@ -210,7 +248,8 @@
           effect_level: document.getElementById("fEffect").value.trim(),
           issuing_authority: document.getElementById("fAuth").value.trim(),
           document_number: document.getElementById("fDocNo").value.trim(),
-          effective_date: document.getElementById("fDate").value.trim()
+          effective_date: document.getElementById("fDate").value.trim(),
+          validity: document.getElementById("fValidity").value.trim() || "有效"
         }
       };
     }
@@ -245,8 +284,13 @@
         UI.toast("无关联原文", false);
         return;
       }
-      const url = base + "/api/files/" + encodeURIComponent(doc.file_id) + "/download";
-      window.open(url, "_blank", "noopener");
+      if (!filePreview) {
+        UI.toast("预览组件未加载", false);
+        return;
+      }
+      filePreview.open(doc.file_id, fileNameCache[doc.file_id] || doc.title).catch(function (e) {
+        UI.toast(e.message || "预览失败", false);
+      });
     }
 
     async function removeDoc(doc) {
@@ -266,42 +310,47 @@
       }
     }
 
-    async function uploadSerial() {
-      const input = document.getElementById("fileInput");
-      const files = input && input.files ? Array.prototype.slice.call(input.files) : [];
+    async function uploadSerial(fileList, statusFn) {
+      const report = typeof statusFn === "function" ? statusFn : setUploadStatus;
+      const files = fileList || [];
       if (!files.length) {
-        UI.toast("请先选择文件", false);
-        return;
+        throw new Error("请先选择文件");
       }
       const btn = document.getElementById("btnUpload");
       btn.disabled = true;
-      input.disabled = true;
       let okCount = 0;
       try {
         for (let i = 0; i < files.length; i++) {
           const file = files[i];
           const label = (i + 1) + "/" + files.length + " " + file.name;
-          setUploadStatus("上传中 " + label);
+          report("上传中 " + label);
           const fileId = await uploadFile(file);
-          setUploadStatus("识别中 / 向量化中 " + label);
-          await api("/api/admin/kb/documents", {
+          report("识别中 / 向量化中 " + label);
+          const created = await api("/api/admin/kb/documents", {
             method: "POST",
             body: JSON.stringify({ doc_type: "law", file_id: fileId })
           });
+          if (!created || !created.id) {
+            throw new Error("入库响应异常，请重启 MCP 后重试");
+          }
           okCount += 1;
         }
-        setUploadStatus("完成：成功 " + okCount + "/" + files.length);
+        report("完成：成功 " + okCount + "/" + files.length);
         UI.toast("已入库 " + okCount + " 个文件", true);
-        input.value = "";
         await loadList();
       } catch (e) {
-        setUploadStatus("失败（已成功 " + okCount + "/" + files.length + "）：" + e.message);
+        report("失败（已成功 " + okCount + "/" + files.length + "）：" + e.message);
         UI.toast(e.message, false);
         try { await loadList(); } catch (_) {}
+        throw e;
       } finally {
         btn.disabled = false;
-        input.disabled = false;
       }
+    }
+
+    function openUploadModal() {
+      if (!uploadModal) return;
+      uploadModal.open();
     }
 
     async function runSearch() {
@@ -314,6 +363,8 @@
         return;
       }
       statusEl.textContent = "检索中…";
+      const articleMatch = q.match(/第[一二三四五六七八九十百千零〇\d]+条/);
+      const article = articleMatch ? articleMatch[0] : "";
       try {
         const data = await api("/api/admin/kb/search", {
           method: "POST",
@@ -325,12 +376,39 @@
           const md = r.metadata || {};
           const title = md.law_name || md.title || r.id || "—";
           const snippet = (r.document || "").slice(0, 400);
+          const fileId = md.file_id || "";
           const li = document.createElement("li");
-          li.innerHTML =
-            '<div class="sr-meta">' + UI.esc(title) +
-            (r.distance != null ? " · distance " + Number(r.distance).toFixed(3) : "") +
-            "</div>" +
-            '<div class="sr-snippet">' + UI.esc(snippet || "（无正文片段）") + "</div>";
+          const meta = document.createElement("div");
+          meta.className = "sr-meta";
+          const titleBtn = document.createElement("button");
+          titleBtn.type = "button";
+          titleBtn.className = "sr-title-link";
+          titleBtn.textContent = title;
+          titleBtn.disabled = !fileId;
+          titleBtn.onclick = function () {
+            if (!fileId) {
+              UI.toast("未关联源文件", false);
+              return;
+            }
+            if (!filePreview) {
+              UI.toast("预览组件未就绪", false);
+              return;
+            }
+            filePreview.open(fileId, title, { article: article }).catch(function (e) {
+              UI.toast(e && e.message ? e.message : String(e), false);
+            });
+          };
+          meta.appendChild(titleBtn);
+          if (r.distance != null) {
+            const dist = document.createElement("span");
+            dist.textContent = " · distance " + Number(r.distance).toFixed(3);
+            meta.appendChild(dist);
+          }
+          const snip = document.createElement("div");
+          snip.className = "sr-snippet";
+          snip.textContent = snippet || "（无正文片段）";
+          li.appendChild(meta);
+          li.appendChild(snip);
           list.appendChild(li);
         });
       } catch (e) {
@@ -339,7 +417,7 @@
       }
     }
 
-    document.getElementById("btnUpload").onclick = function () { uploadSerial(); };
+    document.getElementById("btnUpload").onclick = function () { openUploadModal(); };
     document.getElementById("btnSearch").onclick = function () { runSearch(); };
     document.getElementById("searchQuery").addEventListener("keydown", function (e) {
       if (e.key === "Enter") { e.preventDefault(); runSearch(); }
@@ -348,6 +426,25 @@
     (async function () {
       if (!LegalMindAuth.requireLogin()) return;
       base = await LegalMindAuth.mcpBase();
+      filePreview = KbFilePreview.create({
+        getBase: function () { return base; },
+        api: api,
+        authHeaders: function () { return LegalMindAuth.authHeaders(); },
+        esc: UI.esc,
+        rootId: "kbLawFileViewer"
+      });
+      uploadModal = KbUploadModal.create({
+        rootId: "kbLawUploadModal",
+        title: "添加要上传的文件",
+        hint: "支持 pdf、docx、doc、txt、markdown 等法规文档；上传后将解析正文、识别元数据并向量化入库。",
+        esc: UI.esc,
+        onSubmit: async function (files, ctx) {
+          await uploadSerial(files, function (text) {
+            setUploadStatus(text);
+            if (ctx && ctx.setStatus) ctx.setStatus(text);
+          });
+        }
+      });
       try {
         await loadList();
       } catch (e) {

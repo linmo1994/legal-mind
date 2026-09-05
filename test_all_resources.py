@@ -67,12 +67,12 @@ def main():
     print("测试所有资源的读取内容")
     print("="*70)
     
-    # 1. 法律文书模板 - 需要template_name参数
-    templates = ["劳动合同", "民间借贷纠纷起诉状", "离婚协议书", "房屋租赁合同"]
+    # 1. 法律文书模板 - 来自知识库要素文书（无匹配时返回错误并列出可用名）
+    templates = ["民间借贷纠纷起诉状"]
     for template_name in templates:
         test_resource(
             "legal://doc_template",
-            "法律文书模板",
+            "法律文书模板（知识库）",
             {"template_name": template_name}
         )
     

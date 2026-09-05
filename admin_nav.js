@@ -33,16 +33,25 @@
       ]
     },
     {
+      id: "knowledge",
+      label: "知识库管理",
+      defaultId: "kb-laws",
+      anyPerm: ["cap.vectorize"],
+      items: [
+        { id: "kb-laws", href: "admin_kb_laws.html", label: "法规库", perm: "cap.vectorize" },
+        { id: "kb-cases", href: "admin_kb_cases.html", label: "裁判案例库", perm: "cap.vectorize" },
+        { id: "kb-templates", href: "admin_kb_templates.html", label: "要素文书", perm: "cap.vectorize" },
+        { id: "vectorize", href: "vectorize.html", label: "向量调试", perm: "cap.vectorize" }
+      ]
+    },
+    {
       id: "tools",
       label: "工具管理",
       defaultId: "skills",
-      anyPerm: ["cap.skill_manage", "cap.mcp_manage", "cap.vectorize"],
+      anyPerm: ["cap.skill_manage", "cap.mcp_manage"],
       items: [
         { id: "skills", href: "admin_skills.html", label: "技能", perm: "cap.skill_manage" },
-        { id: "mcp", href: "admin_mcp.html", label: "MCP", perm: "cap.mcp_manage" },
-        { id: "kb-laws", href: "admin_kb_laws.html", label: "知识库 · 法规库", perm: "cap.vectorize" },
-        { id: "kb-cases", href: "admin_kb_cases.html", label: "知识库 · 裁判案例库", perm: "cap.vectorize" },
-        { id: "vectorize", href: "vectorize.html", label: "向量调试", perm: "cap.vectorize" }
+        { id: "mcp", href: "admin_mcp.html", label: "MCP", perm: "cap.mcp_manage" }
       ]
     }
   ];
@@ -60,7 +69,8 @@
       return LegalMindAuth.hasPerm("page.admin")
         || LegalMindAuth.hasPerm("cap.case_manage")
         || LegalMindAuth.hasPerm("cap.user_manage")
-        || LegalMindAuth.hasPerm("cap.skill_manage");
+        || LegalMindAuth.hasPerm("cap.skill_manage")
+        || LegalMindAuth.hasPerm("cap.vectorize");
     }
     return LegalMindAuth.hasPerm(code) || LegalMindAuth.hasPerm("page.admin");
   }
