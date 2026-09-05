@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import MagicMock
 
 from auth_service import AuthService
 from http_rbac_api import RbacHttpApi
@@ -320,6 +321,98 @@ class TestHttpRbacApi(unittest.TestCase):
         self.assertEqual(company["client"]["contact_name"], "王经理")
         st6, deleted = self.api.delete_client(hdr, created["client"]["id"])
         self.assertEqual(st6, 200)
+
+    def test_update_case_ensures_evidence_briefs(self):
+        fs = MagicMock()
+        fs.get_file.return_value = {
+            "id": "ev-new",
+            "text_content": "借条一份，载明借款十万元。",
+            "metadata": {},
+        }
+        self.api.file_service = fs
+
+        login = self.api.login({"username": "director", "password": "ChangeMe123!"})[1]
+        hdr = self._auth_header(login["token"])
+        created_users = []
+        for name in ("p2", "l2", "a2"):
+            st, created = self.api.create_user(
+                hdr,
+                {
+                    "username": name,
+                    "password": "pass12345",
+                    "display_name": name,
+                    "roles": [],
+                    "must_change_password": False,
+                },
+            )
+            self.assertEqual(st, 201)
+            created_users.append(created["user"]["id"])
+        st, case_body = self.api.create_case(
+            hdr,
+            {
+                "case_type": "civil",
+                "title": "证据说明案",
+                "partner_user_id": created_users[0],
+                "lead_lawyer_user_id": created_users[1],
+                "assistant_user_id": created_users[2],
+            },
+        )
+        self.assertEqual(st, 201)
+        fs.update_file_metadata.reset_mock()
+
+        st, updated = self.api.update_case(
+            hdr,
+            case_body["case"]["id"],
+            {"append_evidence_file_ids": ["ev-new"]},
+        )
+        self.assertEqual(st, 200)
+        self.assertEqual(updated["case"]["evidence_file_ids"], ["ev-new"])
+        fs.update_file_metadata.assert_called()
+        args, _kwargs = fs.update_file_metadata.call_args
+        self.assertEqual(args[0], "ev-new")
+        self.assertIn("evidence_brief", args[1])
+        self.assertTrue(str(args[1]["evidence_brief"]).strip())
+
+    def test_update_case_survives_evidence_brief_failure(self):
+        fs = MagicMock()
+        fs.get_file.side_effect = RuntimeError("storage unavailable")
+        self.api.file_service = fs
+
+        login = self.api.login({"username": "director", "password": "ChangeMe123!"})[1]
+        hdr = self._auth_header(login["token"])
+        created_users = []
+        for name in ("p3", "l3", "a3"):
+            st, created = self.api.create_user(
+                hdr,
+                {
+                    "username": name,
+                    "password": "pass12345",
+                    "display_name": name,
+                    "roles": [],
+                    "must_change_password": False,
+                },
+            )
+            self.assertEqual(st, 201)
+            created_users.append(created["user"]["id"])
+        st, case_body = self.api.create_case(
+            hdr,
+            {
+                "case_type": "civil",
+                "title": "证据说明失败案",
+                "partner_user_id": created_users[0],
+                "lead_lawyer_user_id": created_users[1],
+                "assistant_user_id": created_users[2],
+            },
+        )
+        self.assertEqual(st, 201)
+
+        st, updated = self.api.update_case(
+            hdr,
+            case_body["case"]["id"],
+            {"append_evidence_file_ids": ["ev-bad"]},
+        )
+        self.assertEqual(st, 200)
+        self.assertEqual(updated["case"]["evidence_file_ids"], ["ev-bad"])
 
 
 if __name__ == "__main__":

@@ -47,6 +47,8 @@ def run_langgraph(
     write_llm=None,
     template_fn=None,
     cache: Optional[RetrievalCache] = None,
+    case_id=None,
+    case_store=None,
 ) -> Dict[str, Any]:
     messages = messages or []
     skills = skills or []
@@ -77,6 +79,8 @@ def run_langgraph(
                 template_fn=template_fn,
                 retrieval_scopes=(state.get("plan") or {}).get("retrieval_scopes"),
                 intent=(state.get("plan") or {}).get("intent"),
+                case_id=case_id,
+                case_store=case_store,
             )
             trace = list(state.get("trace") or [])
             for item in _trace_from_result(agent_name, last):

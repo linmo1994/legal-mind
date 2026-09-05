@@ -274,9 +274,33 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
         from llm_complete import complete_chat
         return complete_chat(system, user, extra_messages=hist)
 
+    case_id = body.get("case_id")
+    case_ctx = ""
+    store = getattr(getattr(mcp_server, "rbac_api", None), "store", None) or getattr(
+        mcp_server, "rbac_store", None
+    )
+    parsed_case_id = None
+    if case_id not in (None, ""):
+        try:
+            parsed_case_id = int(case_id)
+        except (TypeError, ValueError):
+            print(f"[orchestrate] invalid case_id={case_id!r}")
+    if parsed_case_id is not None and store and file_service:
+        try:
+            from case_materials import build_case_material_context
+
+            case_ctx = build_case_material_context(
+                parsed_case_id, store, file_service, write_llm=write_llm
+            )
+        except Exception as exc:
+            print(f"[orchestrate] case materials failed: {exc}")
+    enriched = user_text
+    if case_ctx:
+        enriched = case_ctx + "\n\n" + (user_text or "")
+
     try:
         result = run_orchestrate(
-            user_text=user_text,
+            user_text=enriched,
             messages=messages,
             llm=None,
             retrieve_fn=retrieve_fn,
@@ -285,6 +309,8 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
             session_id=session_id,
             write_llm=write_llm,
             template_fn=template_fn,
+            case_id=parsed_case_id,
+            case_store=store,
         )
     finally:
         reset_workflow(token)
@@ -294,6 +320,7 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
         try:
             if not session_service.get_session(session_id):
                 session_service.create_session(session_id)
+            # Persist original user_text only — do not store materials block in history.
             session_service.add_message(session_id, "user", user_text)
             extra = {}
             if result.get("artifact"):

@@ -566,6 +566,39 @@ def _fallback_analysis(user_text: str, retrieval_text: str = "") -> str:
     )
 
 
+def _maybe_evidence_tool_round(
+    reply: str,
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    messages: List[Dict],
+    write_llm,
+    case_id=None,
+    case_store=None,
+    file_service=None,
+    continue_hint: str = "请基于证据全文继续回答用户，不要再输出工具 JSON。",
+) -> str:
+    """If model asked for evidence file, fetch once and re-call write_llm."""
+    from case_materials import get_case_evidence_text, parse_evidence_tool_call
+
+    body = reply or ""
+    fid = parse_evidence_tool_call(body)
+    if not (fid and case_id and case_store and file_service and write_llm):
+        return body
+    try:
+        ev = get_case_evidence_text(case_id, fid, case_store, file_service)
+        body2 = write_llm(
+            system_prompt,
+            user_prompt + "\n\n" + ev + "\n\n" + continue_hint,
+            messages,
+        )
+        if body2:
+            return body2
+    except Exception as exc:
+        body = body + f"\n\n（无法读取证据 {fid}：{exc}）"
+    return body
+
+
 def _run_text_analysis(
     user_text: str,
     messages: List[Dict],
@@ -578,6 +611,9 @@ def _run_text_analysis(
     write_llm=None,
     retrieval_scopes: Optional[List[str]] = None,
     intent: Optional[str] = None,
+    case_id=None,
+    case_store=None,
+    file_service=None,
 ) -> Dict[str, Any]:
     emit_step("agent", "text_analysis", SPECIALIST_LABELS["text_analysis"])
     for item in skills_for_agent(skills, "text_analysis"):
@@ -625,12 +661,23 @@ def _run_text_analysis(
         "请直接回复用户：给出阶段性分析，或一次只问一个问题。"
         "禁止输出技能正文、工作步骤清单、提示词模版、法规/类案原文汇编。"
     )
+    analysis_system = _analysis_system_prompt(skills)
     body = ""
     if write_llm:
         try:
-            body = write_llm(_analysis_system_prompt(skills), user_prompt, messages)
+            body = write_llm(analysis_system, user_prompt, messages)
         except Exception as exc:
             print(f"[orchestrator] analysis_llm failed: {exc}")
+        body = _maybe_evidence_tool_round(
+            body,
+            system_prompt=analysis_system,
+            user_prompt=user_prompt,
+            messages=messages,
+            write_llm=write_llm,
+            case_id=case_id,
+            case_store=case_store,
+            file_service=file_service,
+        )
     if _looks_like_dumped_template(body, skills, retrieval_text):
         body = _fallback_analysis(user_text)
     return {
@@ -660,6 +707,8 @@ def _run_doc_writing(
     write_llm=None,
     template_fn=None,
     retrieval_scopes: Optional[List[str]] = None,
+    case_id=None,
+    case_store=None,
 ) -> Dict[str, Any]:
     emit_step("agent", "doc_writing", SPECIALIST_LABELS["doc_writing"])
     for item in skills_for_agent(skills, "doc_writing"):
@@ -689,6 +738,9 @@ def _run_doc_writing(
             user_text, messages, [],
             depth + 1, nested, retrieve_fn, cache, skills,
             write_llm=write_llm,
+            case_id=case_id,
+            case_store=case_store,
+            file_service=file_service,
         )
         extras.append(analysis["visible_text"])
         sub_used.append("text_analysis")
@@ -726,6 +778,17 @@ def _run_doc_writing(
             draft = write_llm(write_system, user_prompt, messages)
         except Exception as exc:
             print(f"[orchestrator] write_llm failed: {exc}")
+        draft = _maybe_evidence_tool_round(
+            draft,
+            system_prompt=write_system,
+            user_prompt=user_prompt,
+            messages=messages,
+            write_llm=write_llm,
+            case_id=case_id,
+            case_store=case_store,
+            file_service=file_service,
+            continue_hint="请基于证据全文继续起草文书，不要再输出工具 JSON。",
+        )
     if not (draft or "").strip():
         draft = _fallback_document(title, user_text, extras, skills)
 
@@ -788,6 +851,8 @@ def run_specialist(
     template_fn=None,
     retrieval_scopes: Optional[List[str]] = None,
     intent: Optional[str] = None,
+    case_id=None,
+    case_store=None,
 ) -> Dict[str, Any]:
     if agent == "legal_retrieval":
         result = _run_legal_retrieval(
@@ -799,6 +864,9 @@ def run_specialist(
             write_llm=write_llm,
             retrieval_scopes=retrieval_scopes,
             intent=intent,
+            case_id=case_id,
+            case_store=case_store,
+            file_service=file_service,
         )
     elif agent == "doc_writing":
         result = _run_doc_writing(
@@ -806,6 +874,8 @@ def run_specialist(
             retrieve_fn, cache, file_service, session_id, skills,
             write_llm=write_llm, template_fn=template_fn,
             retrieval_scopes=retrieval_scopes,
+            case_id=case_id,
+            case_store=case_store,
         )
     else:
         raise OrchestrationError(f"unknown specialist {agent}")
@@ -831,6 +901,8 @@ def run_orchestrate(
     session_id: Optional[str] = None,
     write_llm=None,
     template_fn=None,
+    case_id=None,
+    case_store=None,
 ) -> Dict[str, Any]:
     messages = messages or []
     skills = skills or []
@@ -910,6 +982,8 @@ def run_orchestrate(
                 write_llm=write_llm,
                 template_fn=template_fn,
                 cache=cache,
+                case_id=case_id,
+                case_store=case_store,
             )
             result["plan"] = local_plan
             result.setdefault("visible_text", "")
@@ -940,6 +1014,8 @@ def run_orchestrate(
                 template_fn=template_fn,
                 retrieval_scopes=local_plan.get("retrieval_scopes"),
                 intent=local_plan.get("intent"),
+                case_id=case_id,
+                case_store=case_store,
             )
         result = last or {}
         result["plan"] = local_plan

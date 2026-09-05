@@ -465,6 +465,13 @@ async function init() {
         return;
       }
       try {
+        // 首页跳转可带 case_id；先写入再拉列表，避免被默认清空
+        const bootParams = new URLSearchParams(window.location.search);
+        const bootCase = bootParams.get('case_id');
+        if (bootCase != null && String(bootCase).trim() !== '') {
+          const n = parseInt(bootCase, 10);
+          if (!Number.isNaN(n)) LegalMindAuth.setCaseId(n);
+        }
         await loadActiveCaseOptions();
       } catch (e) {
         console.warn('加载案件列表失败', e);
@@ -1308,10 +1315,13 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
     // 如果提供了onStreamChunk回调，则启用流式输出
     const stream = !!onStreamChunk;
     
-    // 直接使用requestData，添加stream标志
+    // 直接使用requestData，添加stream标志与当前选中案件
     const requestBody = {
       ...requestData,
-      stream: stream
+      stream: stream,
+      case_id: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.getCaseId)
+        ? LegalMindAuth.getCaseId()
+        : null
     };
     
     // 验证 requestBody 是否为空对象
@@ -1359,10 +1369,10 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
     console.log('请求体大小:', requestBodySize, '字节');
     console.log('流式模式:', stream);
     
-    // 构建请求头
-    const headers = {
-      'Content-Type': 'application/json'
-    };
+    // 构建请求头（须带 Authorization，否则服务端会跳过案件材料注入）
+    const headers = (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
+      ? LegalMindAuth.authHeaders()
+      : { 'Content-Type': 'application/json' };
     
     // 如果启用流式输出，添加Accept头声明期望接收text/event-stream
     if (stream) {
@@ -1370,7 +1380,7 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
       console.log('✅ 已设置Accept: text/event-stream 请求头');
     }
     
-    console.log('请求头:', headers);
+    console.log('请求头:', Object.keys(headers));
     
     // 最终验证：确保请求体字符串不为空
     const finalRequestBodyStr = JSON.stringify(requestBody);
@@ -4218,9 +4228,19 @@ async function loadActiveCaseOptions() {
       (c.status_label ? ('（' + c.status_label + '）') : '');
     sel.appendChild(opt);
   });
-  // 默认不选中任何案件，需用户主动下拉选择
-  sel.value = '';
-  LegalMindAuth.setCaseId(null);
+  // 默认：保留已选案件（首页跳转 / 刷新后仍可用）；否则不选中
+  const prevCaseId = LegalMindAuth.getCaseId();
+  const prevStr = prevCaseId != null ? String(prevCaseId) : '';
+  const hasPrev = prevStr && Array.prototype.some.call(sel.options, function (o) {
+    return o.value === prevStr;
+  });
+  if (hasPrev) {
+    sel.value = prevStr;
+    LegalMindAuth.setCaseId(prevCaseId);
+  } else {
+    sel.value = '';
+    if (prevCaseId != null) LegalMindAuth.setCaseId(null);
+  }
   sel.onchange = function () {
     const v = sel.value ? parseInt(sel.value, 10) : null;
     LegalMindAuth.setCaseId(v);

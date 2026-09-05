@@ -71,10 +71,33 @@ def extract_bearer(authorization: Optional[str]) -> Optional[str]:
 
 
 class RbacHttpApi:
-    def __init__(self, store: RbacStore, auth: AuthService, rbac: RbacService):
+    def __init__(
+        self,
+        store: RbacStore,
+        auth: AuthService,
+        rbac: RbacService,
+        file_service=None,
+    ):
         self.store = store
         self.auth = auth
         self.rbac = rbac
+        self.file_service = file_service
+
+    def _ensure_case_evidence_briefs(self, evidence_ids: List[str]) -> None:
+        fs = getattr(self, "file_service", None)
+        if fs is None:
+            return
+        try:
+            write_llm = None
+            try:
+                from llm_complete import complete_chat
+                write_llm = complete_chat
+            except Exception:
+                write_llm = None
+            from case_materials import ensure_evidence_briefs
+            ensure_evidence_briefs(fs, evidence_ids, write_llm=write_llm)
+        except Exception as exc:
+            print(f"[http_rbac_api] ensure evidence briefs failed: {exc}")
 
     def current_user(self, authorization: Optional[str]) -> Optional[Dict[str, Any]]:
         token = extract_bearer(authorization)
@@ -462,6 +485,8 @@ class RbacHttpApi:
                 pass
             return _deny(400, str(exc))
 
+        self._ensure_case_evidence_briefs(evidence_ids)
+
         return _ok(
             {
                 "case": case,
@@ -558,6 +583,11 @@ class RbacHttpApi:
                 clients = self.store.set_case_clients(case_id, [int(x) for x in raw if str(x).strip()])
             except (TypeError, ValueError) as exc:
                 return _deny(400, str(exc))
+
+        if "evidence_file_ids" in body or "append_evidence_file_ids" in body:
+            self._ensure_case_evidence_briefs(
+                _normalize_file_ids(meta.get("evidence_file_ids"))
+            )
 
         return _ok({
             "case": case,

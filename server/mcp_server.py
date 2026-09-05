@@ -155,6 +155,10 @@ class MCPServer:
             print(f"[MCP Server] 警告：文件服务初始化失败: {e}")
             self.file_service = None
 
+        # RBAC API 早于 file_service 构造；此处补注入（证据说明补生成依赖）
+        if getattr(self, "rbac_api", None) is not None:
+            self.rbac_api.file_service = self.file_service
+
         # 知识库 HTTP API（依赖 auth/rbac + file/vector）
         if self.kb_store and self.auth_service and self.rbac_service:
             try:
@@ -1216,6 +1220,43 @@ def load_mcp_listen_port(default: int = 8000) -> int:
     return default
 
 
+def _llm_proxy_evidence_tool_round(reply, messages, case_id, store, file_service):
+    """If model asked for evidence file, fetch once and re-call LLM (mirrors orchestrator)."""
+    from case_materials import get_case_evidence_text, parse_evidence_tool_call
+    from llm_complete import complete_chat
+
+    body = reply or ""
+    fid = parse_evidence_tool_call(body)
+    if not (fid and case_id not in (None, "") and store and file_service):
+        return body
+    try:
+        ev = get_case_evidence_text(int(case_id), fid, store, file_service)
+        sys = next(
+            (m.get("content") or "" for m in (messages or []) if m.get("role") == "system"),
+            "",
+        ) or "你是法律助手。"
+        user_msgs = [m for m in (messages or []) if m.get("role") == "user"]
+        user_prompt = (user_msgs[-1].get("content") if user_msgs else "") or ""
+        hist = [m for m in (messages or []) if m.get("role") in ("user", "assistant")]
+        if hist and hist[-1].get("role") == "user":
+            hist = hist[:-1]
+        body2 = complete_chat(
+            sys,
+            user_prompt
+            + "\n\n"
+            + ev
+            + "\n\n请基于证据全文继续回答用户，不要再输出工具 JSON。",
+            hist,
+        )
+        if body2:
+            print(f"[llm_proxy] evidence tool round ok file_id={fid}")
+            return body2
+    except Exception as exc:
+        print(f"[llm_proxy] evidence tool round failed: {exc}")
+        return body + f"\n\n（无法读取证据 {fid}：{exc}）"
+    return body
+
+
 class MCPHTTPHandler(BaseHTTPRequestHandler):
     """HTTP请求处理器，将HTTP请求转换为MCP协议请求"""
     
@@ -1366,6 +1407,14 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             print(f"[DEBUG] 完整请求数据:")
             print(json.dumps(request_data, ensure_ascii=False, indent=2))
             print(f"[DEBUG] =================================================")
+
+            # Gate case materials / evidence tool round on Authorization + cap.chat
+            from case_materials import allow_case_material_access
+            case_materials_ok = allow_case_material_access(
+                self.headers.get("Authorization"),
+                request_data.get("case_id"),
+                getattr(MCPHTTPHandler.server_instance, "rbac_api", None),
+            )
             
             # 使用配置中的LLM设置
             api_url = LLM_CONFIG.get('api_url', 'https://api.deepseek.com/v1/chat/completions')
@@ -1587,6 +1636,23 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         file_context += "\n\n请基于上述附件内容回答用户问题。"
                         context_parts.append(file_context)
                         print(f"[DEBUG] 已添加文件上下文，文件数量: {len(file_contents)}")
+
+                # 选案后注入案件材料（合同全文 + 证据清单），与编排路径对称
+                # 仅在 Authorization + cap.chat 校验通过时注入
+                raw_case = request_data.get("case_id")
+                if case_materials_ok and raw_case not in (None, ""):
+                    try:
+                        cid = int(raw_case)
+                        store = MCPHTTPHandler.server_instance.rbac_store
+                        fs = MCPHTTPHandler.server_instance.file_service
+                        from case_materials import build_case_material_context
+                        from llm_complete import complete_chat
+                        block = build_case_material_context(cid, store, fs, write_llm=complete_chat)
+                        if block:
+                            context_parts.insert(0, block)
+                            print(f"[DEBUG] 已注入案件材料上下文 case_id={cid}，长度={len(block)}")
+                    except Exception as exc:
+                        print(f"[llm_proxy] case materials failed: {exc}")
                 
                 # 如果资源已调用，添加资源数据上下文
                 if resource_data and resource_uri:
@@ -1778,6 +1844,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 law_text = ''  # 结论内容
                 separator = '==JSON=='
                 separator_found = False
+                # 选案且有权限时先缓冲首轮流，避免 get_case_evidence_file JSON 闪到客户端
+                buffer_first_round = case_materials_ok
                 
                 chunk_count = 0
                 buffer = ''  # 在with块外初始化buffer，避免UnboundLocalError
@@ -1915,10 +1983,11 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                                 "questionContext": None
                                             }
                                             
-                                            # 发送SSE格式数据
-                                            sse_data = f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
-                                            self.wfile.write(sse_data.encode('utf-8'))
-                                            self.wfile.flush()
+                                            # 选案缓冲首轮：不转发增量，等工具回环后再发最终内容
+                                            if not buffer_first_round:
+                                                sse_data = f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+                                                self.wfile.write(sse_data.encode('utf-8'))
+                                                self.wfile.flush()
                                             
                                     except json.JSONDecodeError as json_err:
                                         # 忽略JSON解析错误，继续处理下一个chunk
@@ -2083,25 +2152,62 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                                         "questionContext": None
                                     }
                                     
-                                    sse_data = f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
-                                    self.wfile.write(sse_data.encode('utf-8'))
-                                    self.wfile.flush()
+                                    if not buffer_first_round:
+                                        sse_data = f"data: {json.dumps(response_data, ensure_ascii=False)}\n\n"
+                                        self.wfile.write(sse_data.encode('utf-8'))
+                                        self.wfile.flush()
                     except Exception as e:
                         print(f"[DEBUG] 处理剩余buffer时出错: {e}")
                 
                 print(f"[DEBUG] 流式输出完成，共{chunk_count}个数据块")
+
+                # 证据工具一轮：若模型请求 get_case_evidence_file，取证后重呼并覆盖最终结论
+                # 仅在 case 材料访问校验通过时执行（与注入对称）
+                evidence_round_applied = False
+                try:
+                    raw_case_ev = request_data.get("case_id")
+                    if case_materials_ok and raw_case_ev not in (None, "") and full_content:
+                        round2 = _llm_proxy_evidence_tool_round(
+                            full_content,
+                            messages,
+                            raw_case_ev,
+                            MCPHTTPHandler.server_instance.rbac_store,
+                            MCPHTTPHandler.server_instance.file_service,
+                        )
+                        if round2 and round2 != full_content:
+                            full_content = round2
+                            separator_found = False
+                            law_text = round2.strip()
+                            reasoning_text = ""
+                            evidence_round_applied = True
+                            print("[DEBUG] 流式路径已应用证据工具一轮，覆盖最终内容")
+                except Exception as ev_exc:
+                    print(f"[llm_proxy] stream evidence round skipped: {ev_exc}")
                 
-                # 在发送结束标记前，检查最终的lawQaText是否为空
-                # 如果为空且没有分隔符，将完整内容填充到lawQaText
-                if not separator_found and full_content and (not law_text or not law_text.strip()):
-                    print(f"[DEBUG] 检测到lawQaText为空且无分隔符，将完整内容填充到lawQaText（长度: {len(full_content)}）")
-                    # 重新计算reasoning_text和law_text
-                    # 如果没有分隔符：为了避免客户端同时展示“思考+结论”（重复），这里强制将 reasoningQaText 置空，
-                    # 只把完整内容放到 lawQaText，交由客户端作为最终展示内容。
+                # 缓冲首轮 / 工具回环后 / lawQaText 为空：发一条最终 SSE（不闪工具 JSON）
+                # 无分隔符时 reasoning 置空，避免客户端重复展示。
+                emit_final = False
+                final_law_text = ''
+                final_reasoning_text = ''
+                if evidence_round_applied:
+                    emit_final = True
                     final_law_text = full_content.strip()
                     final_reasoning_text = ''
-                    
-                    # 发送最终的响应，确保lawQaText有内容
+                elif buffer_first_round and full_content:
+                    emit_final = True
+                    if separator_found:
+                        final_law_text = (law_text or '').strip() or full_content.strip()
+                        final_reasoning_text = reasoning_text or ''
+                    else:
+                        final_law_text = full_content.strip()
+                        final_reasoning_text = ''
+                elif not separator_found and full_content and (not law_text or not law_text.strip()):
+                    emit_final = True
+                    final_law_text = full_content.strip()
+                    final_reasoning_text = ''
+
+                if emit_final:
+                    print(f"[DEBUG] 发送最终流式响应（buffer={buffer_first_round}, tool={evidence_round_applied}, len={len(final_law_text)}）")
                     final_response_data = {
                         "type": 7,
                         "dateStr": datetime.now().strftime("%H:%M"),
@@ -2166,6 +2272,28 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 if response:
                     with response:
                         response_data = response.read().decode('utf-8')
+                        try:
+                            raw_case_ev = request_data.get("case_id")
+                            if case_materials_ok and raw_case_ev not in (None, ""):
+                                parsed_resp = json.loads(response_data)
+                                choices = parsed_resp.get("choices") or []
+                                if choices:
+                                    msg = choices[0].get("message") or {}
+                                    content0 = msg.get("content") or ""
+                                    content1 = _llm_proxy_evidence_tool_round(
+                                        content0,
+                                        messages,
+                                        raw_case_ev,
+                                        MCPHTTPHandler.server_instance.rbac_store,
+                                        MCPHTTPHandler.server_instance.file_service,
+                                    )
+                                    if content1 and content1 != content0:
+                                        msg["content"] = content1
+                                        choices[0]["message"] = msg
+                                        parsed_resp["choices"] = choices
+                                        response_data = json.dumps(parsed_resp, ensure_ascii=False)
+                        except Exception as ev_exc:
+                            print(f"[llm_proxy] non-stream evidence round skipped: {ev_exc}")
                         
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')

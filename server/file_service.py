@@ -223,6 +223,23 @@ class FileService:
                 result['text_content'] = row['text_content']
             return result
         return None
+
+    def update_file_metadata(self, file_id: str, patch: Dict) -> Optional[Dict]:
+        """合并写入 files.metadata（JSON）。返回更新后的 get_file 结果。"""
+        info = self.get_file(file_id)
+        if not info:
+            return None
+        meta = dict(info.get("metadata") or {})
+        meta.update(patch or {})
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE files SET metadata = ? WHERE file_id = ?",
+            (json.dumps(meta, ensure_ascii=False), file_id),
+        )
+        conn.commit()
+        conn.close()
+        return self.get_file(file_id)
     
     def get_file_data(self, file_id: str) -> Optional[bytes]:
         """

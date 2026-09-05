@@ -1,5 +1,5 @@
 // 首页功能实现
-const HOME_JS_VERSION = '2026.09.05-casebar';
+const HOME_JS_VERSION = '2026.09.05-casectx2';
 console.log(`[HOME] home.js loaded, version=${HOME_JS_VERSION}`);
 let selectedFiles = [];
 let uploadedFileIds = []; // 存储已上传的文件ID映射 {fileIndex: fileId}
@@ -163,7 +163,7 @@ document.addEventListener('DOMContentLoaded', function() {
   if (historyTab) {
     historyTab.onclick = () => {
       console.log('点击历史记录Tab，跳转到多轮对话页');
-      const url = 'mcp_client.html?v=20260904wf';
+      const url = 'mcp_client.html?v=20260905casectx2';
       
       // 如果在iframe中，通过父窗口跳转；否则直接跳转
       if (window.parent !== window && window.parent.loadPage) {
@@ -664,7 +664,13 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('准备跳转，URL参数input:', userText);
         console.log('编码后的URL参数:', params.get('input'));
       }
-      const url = 'mcp_client.html?v=20260904wf' + (params.toString() ? '&' + params.toString() : '');
+      const caseId = (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.getCaseId)
+        ? LegalMindAuth.getCaseId()
+        : null;
+      if (caseId != null && caseId !== '') {
+        params.set('case_id', String(caseId));
+      }
+      const url = 'mcp_client.html?v=20260905casectx2' + (params.toString() ? '&' + params.toString() : '');
       console.log('完整跳转URL:', url);
       
       // 如果在iframe中，通过父窗口跳转；否则直接跳转
