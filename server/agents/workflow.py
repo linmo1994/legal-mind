@@ -10,17 +10,26 @@ _current: ContextVar[Any] = ContextVar("legalmind_workflow", default=None)
 
 
 class WorkflowTracer:
-    def __init__(self, on_event: Optional[Callable[[Dict[str, str]], None]] = None):
-        self.events: List[Dict[str, str]] = []
+    def __init__(self, on_event: Optional[Callable[[Dict[str, Any]], None]] = None):
+        self.events: List[Dict[str, Any]] = []
         self.on_event = on_event
 
-    def emit(self, kind: str, ident: str, name: str, status: str = "done") -> Dict[str, str]:
-        item = {
+    def emit(
+        self,
+        kind: str,
+        ident: str,
+        name: str,
+        status: str = "done",
+        detail: Any = None,
+    ) -> Dict[str, Any]:
+        item: Dict[str, Any] = {
             "kind": str(kind),
             "id": str(ident or ""),
             "name": str(name or ident or ""),
             "status": status,
         }
+        if detail is not None:
+            item["detail"] = detail
         if not item["id"]:
             return item
         self.events.append(item)
@@ -33,9 +42,9 @@ class WorkflowTracer:
 
 
 class _NoopTracer:
-    events: List[Dict[str, str]] = []
+    events: List[Dict[str, Any]] = []
 
-    def emit(self, *args, **kwargs) -> Dict[str, str]:
+    def emit(self, *args, **kwargs) -> Dict[str, Any]:
         return {}
 
 
@@ -54,5 +63,11 @@ def get_workflow() -> Any:
     return _current.get() or _NOOP
 
 
-def emit_step(kind: str, ident: str, name: str, status: str = "done") -> None:
-    get_workflow().emit(kind, ident, name, status)
+def emit_step(
+    kind: str,
+    ident: str,
+    name: str,
+    status: str = "done",
+    detail: Any = None,
+) -> None:
+    get_workflow().emit(kind, ident, name, status, detail)

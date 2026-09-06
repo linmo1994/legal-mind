@@ -1,6 +1,6 @@
 ---
 name: 法律文书生成指南
-description: 生成法律文书 文书工作流 填充模板 起诉状 起草文书 gen_legal_doc_guide
+description: 用于指导生成法律文书，从法律文书的要素、格式和最终的形式给予指导，当需要写法律文书时调用该技能
 applies_to:
   - doc_writing
   - orchestrator

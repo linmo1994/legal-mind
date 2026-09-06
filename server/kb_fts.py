@@ -219,7 +219,12 @@ class KbFtsIndex:
         document_id: Optional[str] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        from kb_query_parse import build_fts_match
+        from kb_query_parse import (
+            build_fts_match,
+            doc_has_article,
+            extract_articles,
+            extract_law_name_hint,
+        )
 
         match = build_fts_match(query)
         if not match:
@@ -233,7 +238,12 @@ class KbFtsIndex:
         if document_id:
             filters += " AND document_id = ?"
             params.append(document_id)
-        params_limit = list(params) + [limit]
+        hint = extract_law_name_hint(query)
+        articles = extract_articles(query)
+        fetch_n = limit
+        if hint and articles:
+            fetch_n = max(limit, min(50, limit * 5))
+        params_limit = list(params) + [fetch_n]
 
         # body_idx is the only indexed text column; MATCH uses it implicitly.
         sql_bm25 = (
@@ -270,4 +280,34 @@ class KbFtsIndex:
                     "fts_rank": i,
                 }
             )
-        return out
+
+        if hint and out:
+            def _title_ok(title: str) -> bool:
+                t = (title or "").strip()
+                h = (hint or "").strip()
+                if not t or not h:
+                    return False
+                if h in t or t in h:
+                    return True
+                for suffix in ("条例", "规定", "办法", "法"):
+                    if h.endswith(suffix) and len(h) > len(suffix):
+                        stem = h[: -len(suffix)]
+                        if stem and stem in t:
+                            return True
+                return False
+
+            titled = [h for h in out if _title_ok(h.get("title") or "")]
+            pool = titled if titled else out
+            if articles:
+                art_hit = [
+                    h
+                    for h in pool
+                    if any(doc_has_article(h.get("body") or "", a) for a in articles)
+                ]
+                if art_hit:
+                    rest = [h for h in pool if h not in art_hit]
+                    pool = art_hit + rest
+            for i, h in enumerate(pool[:limit], start=1):
+                h["fts_rank"] = i
+            return pool[:limit]
+        return out[:limit]

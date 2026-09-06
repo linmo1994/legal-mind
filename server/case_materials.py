@@ -162,6 +162,25 @@ def build_case_material_context(
     return "\n".join(lines).strip()
 
 
+def resolve_cases_for_file_id(file_id: str, case_ids: List[int], store) -> List[int]:
+    fid = str(file_id or "").strip()
+    hits: List[int] = []
+    if not fid or not store:
+        return hits
+    for cid in case_ids or []:
+        try:
+            case = store.get_case(int(cid))
+        except Exception:
+            continue
+        if not case:
+            continue
+        meta = dict(case.get("meta") or {})
+        bag = set(str(x) for x in (meta.get("evidence_file_ids") or []))
+        if fid in bag:
+            hits.append(int(cid))
+    return hits
+
+
 def get_case_evidence_text(
     case_id: int,
     file_id: str,

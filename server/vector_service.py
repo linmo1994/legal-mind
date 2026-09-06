@@ -177,7 +177,28 @@ class VectorService:
             or self._title_matches_hint((h.get("title") or "").strip(), hint)
         ]
         if matched:
-            # Hard filter: drop unrelated statutes when at least one title matches
+            # Hard filter: drop unrelated statutes when at least one title matches.
+            # Within title matches, prefer chunks that actually contain the queried article.
+            try:
+                from kb_query_parse import doc_has_article, extract_articles
+
+                arts = extract_articles(query)
+            except Exception:
+                arts = []
+            if arts:
+                with_art = [
+                    h
+                    for h in matched
+                    if any(
+                        doc_has_article(h.get("document") or h.get("text") or "", a)
+                        for a in arts
+                    )
+                ]
+                if with_art:
+                    rest = [h for h in matched if h not in with_art]
+                    return sorted(with_art, key=rrf, reverse=True) + sorted(
+                        rest, key=rrf, reverse=True
+                    )
             return sorted(matched, key=rrf, reverse=True)
 
         # Fallback: soft boost only (avoid empty results on bad metadata)

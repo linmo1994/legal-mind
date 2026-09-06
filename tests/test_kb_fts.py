@@ -43,6 +43,31 @@ class TestKbFts(unittest.TestCase):
         self.assertEqual(hits[0]["body"], body)
         self.assertIn("劳动合同法第六十四条", hits[0]["body"])
 
+    def test_law_plus_article_prefers_matching_title(self):
+        """Same article number in two laws → query naming 劳动合同法 must rank that title first."""
+        self.idx.upsert_chunks(
+            [
+                {
+                    "chunk_id": "food_64",
+                    "document_id": "food",
+                    "doc_type": "law",
+                    "title": "中华人民共和国食品安全法",
+                    "body": "第六十四条　食用农产品批发市场违反本法规定的……",
+                },
+                {
+                    "chunk_id": "labor_64",
+                    "document_id": "labor",
+                    "doc_type": "law",
+                    "title": "中华人民共和国劳动合同法",
+                    "body": "第六十四条　被派遣劳动者有权在劳务派遣单位或者用工单位依法参加或者组织工会……",
+                },
+            ]
+        )
+        hits = self.idx.search("帮我检索劳动合同法第64条", doc_type="law", limit=5)
+        self.assertTrue(hits)
+        self.assertEqual(hits[0]["chunk_id"], "labor_64")
+        self.assertIn("劳动合同法", hits[0].get("title") or "")
+
     def test_delete_by_document(self):
         self.idx.upsert_chunks([{
             "chunk_id": "d1_chunk_0",

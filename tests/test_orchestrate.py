@@ -375,33 +375,37 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIn("legal://doc_template", mcp_ids)
 
     def test_llm_gate_law_search_uses_kb(self):
-        calls = {"n": 0, "retrieve": []}
+        os.environ["PLAN_EXECUTE"] = "0"
+        try:
+            calls = {"n": 0, "retrieve": []}
 
-        def write_llm(system, user, hist=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return '{"domain":"legal","intent":"law_search"}'
-            return "unused"
+            def write_llm(system, user, hist=None):
+                calls["n"] += 1
+                if calls["n"] == 1:
+                    return '{"domain":"legal","intent":"law_search"}'
+                return "unused"
 
-        def retrieve(q, scopes=None):
-            calls["retrieve"].append(tuple(scopes or ()))
-            return {
-                "laws": "劳动合同法第六十四条",
-                "cases": "",
-                "law_citations": [],
-                "case_citations": [],
-            }
+            def retrieve(q, scopes=None):
+                calls["retrieve"].append(tuple(scopes or ()))
+                return {
+                    "laws": "劳动合同法第六十四条",
+                    "cases": "",
+                    "law_citations": [],
+                    "case_citations": [],
+                }
 
-        result = run_orchestrate(
-            user_text="检索劳动合同法第64条",
-            messages=[],
-            llm=None,
-            retrieve_fn=retrieve,
-            write_llm=write_llm,
-            skills=[],
-        )
-        self.assertEqual(calls["retrieve"], [("law",)])
-        self.assertEqual(result.get("plan", {}).get("intent"), "law_search")
+            result = run_orchestrate(
+                user_text="检索劳动合同法第64条",
+                messages=[],
+                llm=None,
+                retrieve_fn=retrieve,
+                write_llm=write_llm,
+                skills=[],
+            )
+            self.assertEqual(calls["retrieve"], [("law",)])
+            self.assertEqual(result.get("plan", {}).get("intent"), "law_search")
+        finally:
+            os.environ.pop("PLAN_EXECUTE", None)
 
     def test_llm_gate_non_legal_skips_retrieve(self):
         retrieve_calls = []
@@ -428,6 +432,56 @@ class TestOrchestrator(unittest.TestCase):
         self.assertIn("今天适合出门", result["visible_text"])
         self.assertEqual(result.get("plan", {}).get("intent"), "non_legal")
         self.assertEqual(result.get("citations") or [], [])
+        self.assertEqual(result.get("orchestration_mode"), "non_legal")
+
+    def test_legal_gate_uses_plan_execute_when_enabled(self):
+        import os
+        os.environ.pop("PLAN_EXECUTE", None)  # default on
+
+        from agents.intent_gate import CLASSIFY_SYSTEM
+
+        def write_llm(system, user, hist=None):
+            if system == CLASSIFY_SYSTEM:
+                return '{"domain":"legal","intent":"legal_analysis"}'
+            if "步骤列表" in (system or "") or "规划" in (system or ""):
+                return '{"plan":["给出简要法律意见"]}'
+            if "选一个工具" in (system or ""):
+                return '{"tool":"reason","args":{"prompt":"x"}}'
+            return '{"action":"response","response":"PnE答复"}'
+
+        result = run_orchestrate(
+            user_text="请分析民间借贷纠纷焦点",
+            messages=[],
+            write_llm=write_llm,
+            retrieve_fn=lambda q, scopes=None: {"text": "", "citations": []},
+        )
+        self.assertEqual(result.get("orchestration_mode"), "plan_execute")
+        self.assertIn("PnE", result.get("visible_text") or "")
+
+    def test_plan_execute_disabled_uses_legacy_graph(self):
+        import os
+        os.environ["PLAN_EXECUTE"] = "0"
+        try:
+            from agents.intent_gate import CLASSIFY_SYSTEM
+
+            def write_llm(system, user, hist=None):
+                if system == CLASSIFY_SYSTEM:
+                    return '{"domain":"legal","intent":"legal_analysis"}'
+                # analysis path may call write_llm for final text
+                return "旧路径分析答复"
+
+            result = run_orchestrate(
+                user_text="请分析民间借贷纠纷焦点",
+                messages=[],
+                write_llm=write_llm,
+                retrieve_fn=lambda q, scopes=None: {"text": "法", "citations": []},
+            )
+            self.assertNotEqual(result.get("orchestration_mode"), "plan_execute")
+            # old path uses specialist plan with steps/agents
+            plan = result.get("plan") or {}
+            self.assertTrue(plan.get("steps") or result.get("agent"))
+        finally:
+            os.environ.pop("PLAN_EXECUTE", None)
 
     def test_llm_gate_bad_json_falls_back_to_keyword(self):
         retrieve_calls = []
@@ -457,109 +511,117 @@ class TestOrchestrator(unittest.TestCase):
 
         from case_materials import build_case_material_context
 
-        store = MagicMock()
-        store.get_case.return_value = {
-            "id": 1,
-            "case_no": "A1",
-            "title": "借贷",
-            "meta": {
-                "case_type": "civil",
-                "contract_file_ids": ["c1"],
-                "evidence_file_ids": ["e1"],
-            },
-        }
-        fs = MagicMock()
-
-        def get_file(fid):
-            if fid == "c1":
-                return {
-                    "file_id": "c1",
-                    "original_name": "委托.pdf",
-                    "file_type": "pdf",
-                    "text_content": "合同正文内容",
-                    "metadata": {},
-                }
-            return {
-                "file_id": "e1",
-                "original_name": "转账.png",
-                "file_type": "png",
-                "text_content": "长正文不应注入",
-                "metadata": {"evidence_brief": "银行转账截图"},
+        os.environ["PLAN_EXECUTE"] = "0"
+        try:
+            store = MagicMock()
+            store.get_case.return_value = {
+                "id": 1,
+                "case_no": "A1",
+                "title": "借贷",
+                "meta": {
+                    "case_type": "civil",
+                    "contract_file_ids": ["c1"],
+                    "evidence_file_ids": ["e1"],
+                },
             }
+            fs = MagicMock()
 
-        fs.get_file.side_effect = get_file
-        fs.get_file_text.side_effect = lambda fid: get_file(fid).get("text_content")
-        case_ctx = build_case_material_context(1, store, fs)
-        self.assertIn("【当前案件】", case_ctx)
-        enriched = case_ctx + "\n\n请结合案情帮我分析"
+            def get_file(fid):
+                if fid == "c1":
+                    return {
+                        "file_id": "c1",
+                        "original_name": "委托.pdf",
+                        "file_type": "pdf",
+                        "text_content": "合同正文内容",
+                        "metadata": {},
+                    }
+                return {
+                    "file_id": "e1",
+                    "original_name": "转账.png",
+                    "file_type": "png",
+                    "text_content": "长正文不应注入",
+                    "metadata": {"evidence_brief": "银行转账截图"},
+                }
 
-        captured = {}
+            fs.get_file.side_effect = get_file
+            fs.get_file_text.side_effect = lambda fid: get_file(fid).get("text_content")
+            case_ctx = build_case_material_context(1, store, fs)
+            self.assertIn("【当前案件】", case_ctx)
+            enriched = case_ctx + "\n\n请结合案情帮我分析"
 
-        def write_llm(system, user, hist=None):
-            if "意图分类器" in (system or ""):
-                return '{"domain":"legal","intent":"legal_analysis"}'
-            captured["user"] = user
-            return "分析结论：请补充还款凭证。"
+            captured = {}
 
-        result = run_orchestrate(
-            user_text=enriched,
-            messages=[],
-            llm=None,
-            retrieve_fn=lambda q, scopes=None: {"laws": "", "cases": ""},
-            file_service=fs,
-            skills=[],
-            write_llm=write_llm,
-            case_id=1,
-            case_store=store,
-        )
-        self.assertIn("【当前案件】", captured.get("user") or "")
-        self.assertIn("合同正文内容", captured.get("user") or "")
-        self.assertNotIn("长正文不应注入", captured.get("user") or "")
-        self.assertIn("分析结论", result.get("visible_text") or "")
+            def write_llm(system, user, hist=None):
+                if "意图分类器" in (system or ""):
+                    return '{"domain":"legal","intent":"legal_analysis"}'
+                captured["user"] = user
+                return "分析结论：请补充还款凭证。"
+
+            result = run_orchestrate(
+                user_text=enriched,
+                messages=[],
+                llm=None,
+                retrieve_fn=lambda q, scopes=None: {"laws": "", "cases": ""},
+                file_service=fs,
+                skills=[],
+                write_llm=write_llm,
+                case_id=1,
+                case_store=store,
+            )
+            self.assertIn("【当前案件】", captured.get("user") or "")
+            self.assertIn("合同正文内容", captured.get("user") or "")
+            self.assertNotIn("长正文不应注入", captured.get("user") or "")
+            self.assertIn("分析结论", result.get("visible_text") or "")
+        finally:
+            os.environ.pop("PLAN_EXECUTE", None)
 
     def test_evidence_tool_round_uses_second_llm_reply(self):
         from unittest.mock import MagicMock
 
-        store = MagicMock()
-        store.get_case.return_value = {
-            "id": 1,
-            "meta": {"evidence_file_ids": ["e1"]},
-        }
-        fs = MagicMock()
-        fs.get_file.return_value = {
-            "file_id": "e1",
-            "original_name": "转账.png",
-            "text_content": "转账金额十万元已到账",
-            "metadata": {},
-        }
-        fs.get_file_text.return_value = "转账金额十万元已到账"
+        os.environ["PLAN_EXECUTE"] = "0"
+        try:
+            store = MagicMock()
+            store.get_case.return_value = {
+                "id": 1,
+                "meta": {"evidence_file_ids": ["e1"]},
+            }
+            fs = MagicMock()
+            fs.get_file.return_value = {
+                "file_id": "e1",
+                "original_name": "转账.png",
+                "text_content": "转账金额十万元已到账",
+                "metadata": {},
+            }
+            fs.get_file_text.return_value = "转账金额十万元已到账"
 
-        analysis_calls = []
+            analysis_calls = []
 
-        def write_llm(system, user, hist=None):
-            if "意图分类器" in (system or ""):
-                return '{"domain":"legal","intent":"legal_analysis"}'
-            analysis_calls.append(user)
-            if len(analysis_calls) == 1:
-                return '{"tool":"get_case_evidence_file","file_id":"e1"}'
-            return "终答：证据显示已转账十万元。"
+            def write_llm(system, user, hist=None):
+                if "意图分类器" in (system or ""):
+                    return '{"domain":"legal","intent":"legal_analysis"}'
+                analysis_calls.append(user)
+                if len(analysis_calls) == 1:
+                    return '{"tool":"get_case_evidence_file","file_id":"e1"}'
+                return "终答：证据显示已转账十万元。"
 
-        result = run_orchestrate(
-            user_text="请结合证据分析民间借贷纠纷，原告张三被告李四借款未还",
-            messages=[],
-            llm=None,
-            retrieve_fn=lambda q, scopes=None: {"laws": "", "cases": ""},
-            file_service=fs,
-            skills=[],
-            write_llm=write_llm,
-            case_id=1,
-            case_store=store,
-        )
-        self.assertEqual(len(analysis_calls), 2)
-        self.assertIn("【证据全文】", analysis_calls[1])
-        self.assertIn("转账金额十万元已到账", analysis_calls[1])
-        self.assertEqual(result.get("visible_text"), "终答：证据显示已转账十万元。")
-        self.assertNotIn("get_case_evidence_file", result.get("visible_text") or "")
+            result = run_orchestrate(
+                user_text="请结合证据分析民间借贷纠纷，原告张三被告李四借款未还",
+                messages=[],
+                llm=None,
+                retrieve_fn=lambda q, scopes=None: {"laws": "", "cases": ""},
+                file_service=fs,
+                skills=[],
+                write_llm=write_llm,
+                case_id=1,
+                case_store=store,
+            )
+            self.assertEqual(len(analysis_calls), 2)
+            self.assertIn("【证据全文】", analysis_calls[1])
+            self.assertIn("转账金额十万元已到账", analysis_calls[1])
+            self.assertEqual(result.get("visible_text"), "终答：证据显示已转账十万元。")
+            self.assertNotIn("get_case_evidence_file", result.get("visible_text") or "")
+        finally:
+            os.environ.pop("PLAN_EXECUTE", None)
 
     def test_handle_orchestrate_injects_case_keeps_original_history(self):
         from unittest.mock import MagicMock, patch
@@ -615,6 +677,116 @@ class TestOrchestrator(unittest.TestCase):
         self.assertEqual(len(user_calls), 1)
         self.assertNotIn("【当前案件】", user_calls[0].args[2])
         self.assertTrue(result.get("saved_to_session"))
+
+    def test_handle_orchestrate_star_skips_material_inject(self):
+        from unittest.mock import MagicMock, patch
+
+        from http_api_extra import handle_orchestrate
+
+        store = MagicMock()
+        store.list_cases_for_user.return_value = [{"id": 7}, {"id": 8}]
+        rbac = MagicMock()
+        rbac.rbac.require.return_value = True
+        rbac.store = store
+        mcp = MagicMock()
+        mcp.rbac_api = rbac
+        mcp.rbac_store = store
+        mcp.file_service = MagicMock()
+        mcp.session_service = None
+        mcp._handle_resource_read.return_value = {"result": {"contents": [{"text": ""}]}}
+
+        captured = {}
+
+        def fake_run(**kwargs):
+            captured.update(kwargs)
+            return {"visible_text": "ok", "agent": "text_analysis"}
+
+        with patch("http_api_extra.run_orchestrate", side_effect=fake_run), patch(
+            "http_api_extra.skill_service"
+        ) as skill_svc, patch("http_api_extra.make_retrieve_fn", return_value=lambda q: {}), patch(
+            "case_materials.build_case_material_context"
+        ) as build_ctx:
+            skill_svc.return_value.match.return_value = []
+            handle_orchestrate(
+                mcp,
+                {
+                    "user_text": "请分析",
+                    "case_id": "*",
+                    "_auth_user_id": 42,
+                },
+            )
+
+        build_ctx.assert_not_called()
+        self.assertNotIn("【当前案件】", captured.get("user_text") or "")
+        self.assertEqual(captured.get("case_scope"), "all_permitted")
+        self.assertEqual(captured.get("permitted_case_ids"), [7, 8])
+        self.assertIsNone(captured.get("case_id"))
+
+    def test_handle_orchestrate_passes_resume_state_and_persists_awaiting(self):
+        from unittest.mock import MagicMock, patch
+
+        from http_api_extra import handle_orchestrate
+
+        session = MagicMock()
+        session.get_session.return_value = {"id": "s-resume"}
+        mcp = MagicMock()
+        mcp.rbac_store = None
+        mcp.rbac_api = None
+        mcp.file_service = None
+        mcp.session_service = session
+        mcp._handle_resource_read.return_value = {"result": {"contents": [{"text": ""}]}}
+
+        resume_in = {
+            "objective": "查明合同效力",
+            "plan": ["检索法条", "ask_user"],
+            "past_steps": [{"step": "检索法条", "result": "ok"}],
+            "tool_calls_used": 1,
+            "replan_count": 0,
+        }
+        resume_out = {
+            **resume_in,
+            "past_steps": resume_in["past_steps"] + [{"step": "ask_user", "result": "pending"}],
+        }
+        captured = {}
+
+        def fake_run(**kwargs):
+            captured["resume_state"] = kwargs.get("resume_state")
+            return {
+                "visible_text": "",
+                "pending_question": "请补充合同签订日期？",
+                "status": "awaiting_user",
+                "plan": ["检索法条", "ask_user"],
+                "past_steps": resume_out["past_steps"],
+                "resume_state": resume_out,
+                "orchestration_mode": "plan_execute",
+            }
+
+        with patch("http_api_extra.run_orchestrate", side_effect=fake_run), patch(
+            "http_api_extra.skill_service"
+        ) as skill_svc, patch("http_api_extra.make_retrieve_fn", return_value=lambda q: {}):
+            skill_svc.return_value.match.return_value = []
+            result = handle_orchestrate(
+                mcp,
+                {
+                    "user_text": "大概是去年签的",
+                    "session_id": "s-resume",
+                    "resume_state": resume_in,
+                },
+            )
+
+        self.assertEqual(captured.get("resume_state"), resume_in)
+        self.assertEqual(result.get("status"), "awaiting_user")
+        self.assertTrue(result.get("saved_to_session"))
+        assistant_calls = [
+            c for c in session.add_message.call_args_list if c.args[1] == "assistant"
+        ]
+        self.assertEqual(len(assistant_calls), 1)
+        self.assertEqual(assistant_calls[0].args[2], "请补充合同签订日期？")
+        extra = assistant_calls[0].kwargs.get("extra") or {}
+        self.assertEqual(extra.get("resume_state"), resume_out)
+        self.assertEqual(extra.get("plan"), ["检索法条", "ask_user"])
+        self.assertEqual(extra.get("past_steps"), resume_out["past_steps"])
+        self.assertEqual(extra.get("status"), "awaiting_user")
 
 
 if __name__ == "__main__":

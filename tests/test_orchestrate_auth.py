@@ -47,6 +47,20 @@ class TestOrchestrateAuth(unittest.TestCase):
         self.assertEqual(st, 200)
         self.assertEqual(body["case_id"], case["id"])
 
+    def test_case_id_all_permitted_sentinel(self):
+        st, body = self.api.check_orchestrate_access(
+            self.hdr, {"case_id": "*", "user_text": "hi"}
+        )
+        self.assertEqual(st, 200)
+        self.assertEqual(body.get("case_id"), "*")
+        self.assertEqual(body.get("case_scope"), "all_permitted")
+
+    def test_case_id_garbage_still_400(self):
+        st, body = self.api.check_orchestrate_access(
+            self.hdr, {"case_id": "abc", "user_text": "hi"}
+        )
+        self.assertEqual(st, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from agents.graph import OrchestrationError
 from agents.orchestrator import run_orchestrate
@@ -52,19 +52,43 @@ def format_kb_hits(hits: list, *, limit: int = 5) -> str:
     return "\n\n".join(parts)
 
 
+def prefer_hits_matching_articles(hits: list, query: str = "") -> list:
+    """Reorder hits so chunks containing the queried article come first."""
+    try:
+        from kb_query_parse import doc_has_article, extract_articles
+    except Exception:
+        return list(hits or [])
+
+    articles = extract_articles(query or "")
+    if not articles or not hits:
+        return list(hits or [])
+
+    matched: List[Any] = []
+    rest: List[Any] = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            rest.append(hit)
+            continue
+        doc = hit.get("document") or hit.get("text") or ""
+        if any(doc_has_article(doc, a) for a in articles):
+            matched.append(hit)
+        else:
+            rest.append(hit)
+    return matched + rest
+
+
 def hits_to_citations(hits: list, query: str = "") -> list:
     """Convert vector/FTS search hits into structured citation dicts.
 
     Dedupes by (file_id|document_id|title) + article so one law+article
     yields a single link even when multiple chunks match.
+    Article labels follow hit text (query article only if present in the chunk).
     """
     try:
-        from kb_query_parse import extract_articles
+        from kb_query_parse import resolve_hit_article
     except Exception:
-        extract_articles = None  # type: ignore
+        resolve_hit_article = None  # type: ignore
 
-    query_articles = extract_articles(query) if extract_articles else []
-    query_article = query_articles[0] if query_articles else None
     out = []
     seen = set()
     for hit in hits or []:
@@ -77,10 +101,10 @@ def hits_to_citations(hits: list, query: str = "") -> list:
         title = (
             meta.get("title") or meta.get("law_name") or meta.get("case_no") or ""
         ).strip()
-        article = query_article
-        if not article and extract_articles and doc:
-            found = extract_articles(doc)
-            article = found[0] if found else None
+        if resolve_hit_article:
+            article = resolve_hit_article(doc, query)
+        else:
+            article = None
         file_id = meta.get("file_id") or None
         document_id = meta.get("document_id") or ""
         dedupe_key = (
@@ -122,6 +146,26 @@ def make_kb_retrieve_fn(mcp_server):
             return inst[0]
         return None
 
+    def _search_scoped(vs, q: str, doc_type: str) -> list:
+        pool = 5
+        try:
+            from kb_query_parse import extract_articles
+
+            if extract_articles(q):
+                # Article queries often lose the exact chunk in Top-5 RRF; expand then prefer.
+                pool = 20
+        except Exception:
+            pass
+        try:
+            hits = vs.search(
+                q, n_results=pool, boost_keywords=True, where={"doc_type": doc_type}
+            )
+        except Exception as exc:
+            print(f"[kb_retrieve] {doc_type} search failed: {exc}")
+            return []
+        hits = prefer_hits_matching_articles(hits or [], q)
+        return hits[:5]
+
     def retrieve(query: str, scopes=None) -> Dict[str, Any]:
         scopes = [s for s in (scopes or ["law", "case"]) if s in ("law", "case")]
         if not scopes:
@@ -137,19 +181,11 @@ def make_kb_retrieve_fn(mcp_server):
             return out
         q = (query or "").strip() or "法律"
         if "law" in scopes:
-            try:
-                hits = vs.search(q, n_results=5, boost_keywords=True, where={"doc_type": "law"})
-            except Exception as exc:
-                hits = []
-                print(f"[kb_retrieve] law search failed: {exc}")
+            hits = _search_scoped(vs, q, "law")
             out["laws"] = format_kb_hits(hits)
             out["law_citations"] = hits_to_citations(hits, q)
         if "case" in scopes:
-            try:
-                hits = vs.search(q, n_results=5, boost_keywords=True, where={"doc_type": "case"})
-            except Exception as exc:
-                hits = []
-                print(f"[kb_retrieve] case search failed: {exc}")
+            hits = _search_scoped(vs, q, "case")
             out["cases"] = format_kb_hits(hits)
             out["case_citations"] = hits_to_citations(hits, q)
         return out
@@ -274,18 +310,34 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
         from llm_complete import complete_chat
         return complete_chat(system, user, extra_messages=hist)
 
-    case_id = body.get("case_id")
+    raw_case = body.get("case_id")
     case_ctx = ""
     store = getattr(getattr(mcp_server, "rbac_api", None), "store", None) or getattr(
         mcp_server, "rbac_store", None
     )
     parsed_case_id = None
-    if case_id not in (None, ""):
+    case_scope = "none"
+    permitted_case_ids: list = []
+    if raw_case == "*":
+        case_scope = "all_permitted"
+        rbac_api = getattr(mcp_server, "rbac_api", None)
+        uid = body.get("_auth_user_id")
+        if store and uid is not None and rbac_api:
+            try:
+                can_all = rbac_api.rbac.require(int(uid), "cap.case_manage")
+                cases = store.list_cases_for_user(int(uid), all_cases=bool(can_all))
+                permitted_case_ids = [
+                    int(c["id"]) for c in (cases or []) if c.get("id") is not None
+                ]
+            except Exception as exc:
+                print(f"[orchestrate] permitted cases failed: {exc}")
+    elif raw_case not in (None, ""):
         try:
-            parsed_case_id = int(case_id)
+            parsed_case_id = int(raw_case)
+            case_scope = "single"
         except (TypeError, ValueError):
-            print(f"[orchestrate] invalid case_id={case_id!r}")
-    if parsed_case_id is not None and store and file_service:
+            print(f"[orchestrate] invalid case_id={raw_case!r}")
+    if case_scope == "single" and parsed_case_id is not None and store and file_service:
         try:
             from case_materials import build_case_material_context
 
@@ -311,6 +363,9 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
             template_fn=template_fn,
             case_id=parsed_case_id,
             case_store=store,
+            case_scope=case_scope,
+            permitted_case_ids=permitted_case_ids,
+            resume_state=body.get("resume_state"),
         )
     finally:
         reset_workflow(token)
@@ -322,15 +377,26 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
                 session_service.create_session(session_id)
             # Persist original user_text only — do not store materials block in history.
             session_service.add_message(session_id, "user", user_text)
+            assistant_text = result.get("visible_text") or ""
+            if result.get("status") == "awaiting_user":
+                assistant_text = result.get("pending_question") or assistant_text
             extra = {}
             if result.get("artifact"):
                 extra["artifact"] = result["artifact"]
             if result.get("capabilities"):
                 extra["capabilities"] = result["capabilities"]
+            if result.get("resume_state"):
+                extra["resume_state"] = result["resume_state"]
+            if result.get("plan") is not None:
+                extra["plan"] = result["plan"]
+            if result.get("past_steps"):
+                extra["past_steps"] = result["past_steps"]
+            if result.get("status"):
+                extra["status"] = result["status"]
             session_service.add_message(
                 session_id,
                 "assistant",
-                result.get("visible_text") or "",
+                assistant_text,
                 extra=extra or None,
             )
             saved = True

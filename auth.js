@@ -95,6 +95,7 @@
       } catch (e) {}
       Auth.clearSession();
     },
+    // case_id: number | null | '*'（全选，我有权限的案件）
     getCaseId: function () {
       const s = read();
       return s && s.case_id != null ? s.case_id : null;

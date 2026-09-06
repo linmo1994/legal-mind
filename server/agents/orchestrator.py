@@ -371,6 +371,7 @@ def _run_non_legal(
         "citations": [],
         "plan": local_plan,
         "subcalls_used": [],
+        "orchestration_mode": "non_legal",
         "capabilities": merge_capability_items([cap_agent("orchestrator")]),
     }
     return attach_call_flow(result, workflow)
@@ -903,6 +904,9 @@ def run_orchestrate(
     template_fn=None,
     case_id=None,
     case_store=None,
+    case_scope=None,
+    permitted_case_ids=None,
+    resume_state=None,
 ) -> Dict[str, Any]:
     messages = messages or []
     skills = skills or []
@@ -915,6 +919,8 @@ def run_orchestrate(
         own_token = bind_workflow(workflow)
 
     def _execute() -> Dict[str, Any]:
+        import os
+
         local_plan = None
         from_gate = False
 
@@ -925,8 +931,37 @@ def run_orchestrate(
                 if gate.get("domain") == "non_legal":
                     return _run_non_legal(user_text, messages, write_llm, workflow)
                 if gate.get("domain") == "legal":
-                    local_plan = plan_for_intent(gate.get("intent") or "legal_analysis")
                     from_gate = True
+                    use_pe = os.environ.get("PLAN_EXECUTE", "1").strip() not in (
+                        "0",
+                        "false",
+                        "False",
+                    )
+                    if use_pe:
+                        try:
+                            from agents.plan_execute import run_plan_execute
+
+                            pe = run_plan_execute(
+                                objective=user_text,
+                                messages=messages,
+                                write_llm=write_llm,
+                                retrieve_fn=retrieve_fn,
+                                file_service=file_service,
+                                case_id=case_id,
+                                case_store=case_store,
+                                case_scope=case_scope,
+                                permitted_case_ids=permitted_case_ids,
+                                skills=skills,
+                                session_id=session_id,
+                                resume_state=resume_state,
+                            )
+                            return attach_call_flow(pe, workflow)
+                        except Exception as exc:
+                            print(
+                                f"[orchestrator] plan_execute failed, fallback graph: {exc}"
+                            )
+                            # fall through to existing plan_for_intent / langgraph path
+                    local_plan = plan_for_intent(gate.get("intent") or "legal_analysis")
 
         if not from_gate:
             if llm is not None:
@@ -988,6 +1023,7 @@ def run_orchestrate(
             result["plan"] = local_plan
             result.setdefault("visible_text", "")
             result.setdefault("citations", [])
+            result.setdefault("orchestration_mode", "legacy_graph")
             return attach_call_flow(result, workflow)
         except OrchestrationError:
             raise
@@ -1021,6 +1057,7 @@ def run_orchestrate(
         result["plan"] = local_plan
         result.setdefault("visible_text", "")
         result.setdefault("citations", [])
+        result.setdefault("orchestration_mode", "legacy_graph")
         return attach_call_flow(result, workflow)
 
     try:

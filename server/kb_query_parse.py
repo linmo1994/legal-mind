@@ -9,8 +9,20 @@ from kb_fts import normalize_fts_query
 
 _ARTICLE_RE = re.compile(r"第[一二三四五六七八九十百千零〇\d]+条")
 
+_SEARCH_VERB_TOKENS = (
+    "找一下",
+    "查一下",
+    "帮忙",
+    "检索",
+    "查找",
+    "搜索",
+    "查询",
+    "帮我",
+    "请",
+)
+
 _SEARCH_VERBS_RE = re.compile(
-    r"^(检索|查找|搜索|查询|帮我|请|帮忙|找一下|查一下)\s*"
+    r"^(" + "|".join(re.escape(v) for v in _SEARCH_VERB_TOKENS) + r")\s*"
 )
 
 _LAW_SUFFIX_RE = re.compile(r"(法|条例|规定|办法)")
@@ -154,12 +166,51 @@ def normalize_article_forms(article: str) -> List[str]:
     return forms
 
 
+def doc_has_article(doc: str, article: str) -> bool:
+    """True if document text contains any normalized form of the article."""
+    text = doc or ""
+    if not text or not (article or "").strip():
+        return False
+    return any(form in text for form in normalize_article_forms(article))
+
+
+def resolve_hit_article(doc: str, query: str = "") -> Optional[str]:
+    """Pick citation article from hit text; never stamp query article onto unrelated chunks.
+
+    Prefer a query article only when a normalized form appears in the document;
+    otherwise use the first article found in the document; otherwise None.
+    """
+    text = (doc or "").strip()
+    query_articles = extract_articles(query or "")
+    doc_articles = extract_articles(text) if text else []
+
+    for qa in query_articles:
+        qa_forms = set(normalize_article_forms(qa))
+        if not qa_forms:
+            continue
+        if not any(f in text for f in qa_forms):
+            continue
+        for da in doc_articles:
+            if set(normalize_article_forms(da)) & qa_forms:
+                return da
+        return qa
+
+    if doc_articles:
+        return doc_articles[0]
+    return None
+
+
 def extract_law_name_hint(query: str) -> Optional[str]:
     """Heuristic: strip search verbs, keep span containing 法|条例|规定|办法."""
     text = (query or "").strip()
     if not text:
         return None
-    text = _SEARCH_VERBS_RE.sub("", text).strip()
+    # Strip stacked leading verbs: 「帮我检索劳动合同法…」
+    while True:
+        nxt = _SEARCH_VERBS_RE.sub("", text).strip()
+        if nxt == text:
+            break
+        text = nxt
     # Drop article spans so they don't pollute the law name
     text_wo = _ARTICLE_RE.sub(" ", text)
     text_wo = re.sub(r"\s+", " ", text_wo).strip()
@@ -172,15 +223,28 @@ def extract_law_name_hint(query: str) -> Optional[str]:
     if candidates:
         # Longest first (more specific)
         candidates.sort(key=len, reverse=True)
-        return candidates[0]
-    if _LAW_SUFFIX_RE.search(text_wo):
+        hint = candidates[0]
+    elif _LAW_SUFFIX_RE.search(text_wo):
         # Fallback: take CJK chars around the suffix token
         m = re.search(
             r"([\u4e00-\u9fff]{2,}(?:法|条例|规定|办法))", text_wo
         )
-        if m:
-            return m.group(1)
-    return None
+        if not m:
+            return None
+        hint = m.group(1)
+    else:
+        return None
+
+    # If a verb was glued into the candidate (no whitespace), peel it off.
+    changed = True
+    while changed:
+        changed = False
+        for v in sorted(_SEARCH_VERB_TOKENS, key=len, reverse=True):
+            if hint.startswith(v) and len(hint) > len(v) + 1:
+                hint = hint[len(v) :]
+                changed = True
+                break
+    return hint or None
 
 
 def _quote_token(t: str) -> str:
@@ -189,7 +253,12 @@ def _quote_token(t: str) -> str:
 
 def build_fts_match(query: str) -> str:
     """
-    If both law-name hint and article are present: AND law tokens with article.
+    Build FTS5 MATCH string.
+
+    When both law-name hint and article are present: MATCH **article forms only**.
+    Law name is applied as a title filter in KbFtsIndex.search (title is UNINDEXED;
+    unicode61 also keeps full titles as one token so AND-ing 「劳动合同法」 against
+    body_idx often yields zero hits).
     Otherwise: fall back to OR via normalize_fts_query.
     """
     text = (query or "").strip()
@@ -200,37 +269,12 @@ def build_fts_match(query: str) -> str:
     if not (articles and hint):
         return normalize_fts_query(text)
 
-    # Law-side tokens: prefer the full hint as a phrase, plus 2+ char pieces
-    law_tokens: List[str] = []
-    if len(hint) >= 2:
-        law_tokens.append(hint)
-    for part in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9\-]+", hint):
-        if part not in law_tokens:
-            law_tokens.append(part)
-    # Cap law tokens
-    law_tokens = law_tokens[:6]
-
-    # Article side: include original + normalized forms (unique)
     art_tokens: List[str] = []
     for a in articles:
         for form in normalize_article_forms(a):
             if form not in art_tokens:
                 art_tokens.append(form)
     art_tokens = art_tokens[:4]
-
-    if not law_tokens or not art_tokens:
+    if not art_tokens:
         return normalize_fts_query(text)
-
-    # Law group: OR among law tokens (any law phrase) AND article group
-    # (OR among article forms so 第64条 / 第六十四条 both match)
-    law_expr = " OR ".join(_quote_token(t) for t in law_tokens)
-    art_expr = " OR ".join(_quote_token(t) for t in art_tokens)
-    if len(law_tokens) == 1:
-        law_part = law_expr
-    else:
-        law_part = f"({law_expr})"
-    if len(art_tokens) == 1:
-        art_part = art_expr
-    else:
-        art_part = f"({art_expr})"
-    return f"{law_part} AND {art_part}"
+    return " OR ".join(_quote_token(t) for t in art_tokens)

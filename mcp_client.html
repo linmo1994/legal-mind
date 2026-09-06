@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind（MCP）</title>
-  <link rel="stylesheet" href="mcp_client.css?v=20260905casetools">
+  <link rel="stylesheet" href="mcp_client.css?v=20260906case1">
   <script>
     // 检测file://协议并提示
     if (window.location.protocol === 'file:') {
@@ -50,84 +50,96 @@
         <div id="sessionList" class="session-list"></div>
       </aside>
 
-      <!-- 对话区域 -->
+      <!-- 对话区域：主栏 + 底部编排抽屉 -->
       <div class="chat-area">
-        <div id="chatMessages" class="chat-messages"></div>
-        
-        <!-- 参数选择弹窗 -->
-        <div id="parameterModal" class="modal" style="display: none;">
-          <div class="modal-content">
-            <h3>请选择参数值</h3>
-            <div id="parameterOptions" class="parameter-options"></div>
-            <div class="modal-actions">
-              <button id="confirmParameterBtn" class="btn-primary">确认</button>
-              <button id="cancelParameterBtn" class="btn-secondary">取消</button>
-            </div>
-          </div>
-        </div>
+        <div class="chat-main-column">
+          <div id="chatMessages" class="chat-messages"></div>
 
-        <!-- 工具调用批准弹窗 -->
-        <div id="toolApprovalModal" class="modal" style="display: none;">
-          <div class="modal-content">
-            <h3>工具调用请求</h3>
-            <div id="toolApprovalInfo" class="tool-info"></div>
-            <div class="modal-actions">
-              <button id="approveToolBtn" class="btn-primary">批准</button>
-              <button id="rejectToolBtn" class="btn-secondary">拒绝</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 删除确认弹窗 -->
-        <div id="deleteConfirmModal" class="modal" style="display: none;">
-          <div class="modal-content delete-modal-content">
-            <h3 class="delete-modal-title">删除确认</h3>
-            <p id="deleteConfirmMessage" class="delete-modal-message">确定删除该对话吗?删除后将无法查看</p>
-            <div class="modal-actions">
-              <button id="cancelDeleteBtn" class="btn-secondary">取消</button>
-              <button id="confirmDeleteBtn" class="btn-danger">删除</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- 文件预览区域（悬浮在输入框上方） -->
-        <div id="filePreviewArea" class="file-preview-area" style="display: none;">
-          <div class="file-preview-header">
-            <span class="file-preview-title">已上传文件</span>
-            <button id="clearFilesBtn" class="btn-clear-files" title="清除所有文件">✕</button>
-          </div>
-          <div id="filePreviewList" class="file-preview-list"></div>
-        </div>
-
-        <!-- 输入区域 -->
-        <div class="input-area">
-          <div class="input-wrapper">
-            <!-- 文件预览容器 - 在输入框内部左上角（与首页相同效果） -->
-            <div id="filePreviewContainer" class="file-preview-container" style="display: none;">
-              <div id="filePreviewListInline" class="file-preview-list-inline"></div>
-            </div>
-            <textarea 
-              id="userInput" 
-              placeholder="请输入您的问题或需求..." 
-              rows="3"
-            ></textarea>
-            <div class="composer-tools">
-              <button id="fileUploadBtn" class="btn-icon btn-icon-float" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
-              <div class="composer-case-bar" title="当前办案上下文">
-                <label for="activeCaseSelect" class="sr-only">案件</label>
-                <select id="activeCaseSelect" aria-label="选择案件">
-                  <option value="" selected>请选择案件…</option>
-                </select>
+          <!-- 参数选择弹窗 -->
+          <div id="parameterModal" class="modal" style="display: none;">
+            <div class="modal-content">
+              <h3>请选择参数值</h3>
+              <div id="parameterOptions" class="parameter-options"></div>
+              <div class="modal-actions">
+                <button id="confirmParameterBtn" class="btn-primary">确认</button>
+                <button id="cancelParameterBtn" class="btn-secondary">取消</button>
               </div>
             </div>
-            <button id="sendBtn" class="btn-primary btn-send-float" onclick="handleUserInput(); return false;" title="发送">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
-              </svg>
-            </button>
-            <input type="file" id="fileInput" style="display: none;" multiple>
+          </div>
+
+          <!-- 工具调用批准弹窗 -->
+          <div id="toolApprovalModal" class="modal" style="display: none;">
+            <div class="modal-content">
+              <h3>工具调用请求</h3>
+              <div id="toolApprovalInfo" class="tool-info"></div>
+              <div class="modal-actions">
+                <button id="approveToolBtn" class="btn-primary">批准</button>
+                <button id="rejectToolBtn" class="btn-secondary">拒绝</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 删除确认弹窗 -->
+          <div id="deleteConfirmModal" class="modal" style="display: none;">
+            <div class="modal-content delete-modal-content">
+              <h3 class="delete-modal-title">删除确认</h3>
+              <p id="deleteConfirmMessage" class="delete-modal-message">确定删除该对话吗?删除后将无法查看</p>
+              <div class="modal-actions">
+                <button id="cancelDeleteBtn" class="btn-secondary">取消</button>
+                <button id="confirmDeleteBtn" class="btn-danger">删除</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 文件预览区域（悬浮在输入框上方） -->
+          <div id="filePreviewArea" class="file-preview-area" style="display: none;">
+            <div class="file-preview-header">
+              <span class="file-preview-title">已上传文件</span>
+              <button id="clearFilesBtn" class="btn-clear-files" title="清除所有文件">✕</button>
+            </div>
+            <div id="filePreviewList" class="file-preview-list"></div>
+          </div>
+
+          <!-- 输入区域 -->
+          <div class="input-area">
+            <div class="input-wrapper">
+              <div id="filePreviewContainer" class="file-preview-container" style="display: none;">
+                <div id="filePreviewListInline" class="file-preview-list-inline"></div>
+              </div>
+              <textarea
+                id="userInput"
+                placeholder="请输入您的问题或需求..."
+                rows="3"
+              ></textarea>
+              <div class="composer-tools">
+                <button id="fileUploadBtn" class="btn-icon btn-icon-float" data-tooltip="可上传.pdf、.docx、.txt、.png格式文件，单文件最大限制为1MB" title="">📎</button>
+                <div class="composer-case-bar" title="当前办案上下文">
+                  <label for="activeCaseSelect" class="sr-only">案件</label>
+                  <select id="activeCaseSelect" aria-label="选择案件">
+                    <option value="" selected>请选择案件…</option>
+                  </select>
+                </div>
+              </div>
+              <button id="sendBtn" class="btn-primary btn-send-float" onclick="handleUserInput(); return false;" title="发送">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M2 21L23 12L2 3V10L17 12L2 14V21Z" fill="currentColor"/>
+                </svg>
+              </button>
+              <input type="file" id="fileInput" style="display: none;" multiple>
+            </div>
           </div>
         </div>
+
+        <aside id="orchestrateWorkbench" class="orchestrate-workbench" aria-label="编排工作台">
+          <div class="orchestrate-workbench-header">
+            <span class="orchestrate-workbench-title">编排工作台</span>
+            <button type="button" id="orchestrateWorkbenchClose" class="orchestrate-workbench-close" title="关闭" aria-label="关闭工作台">×</button>
+          </div>
+          <div id="orchestrateWorkbenchBody" class="orchestrate-workbench-body">
+            <p class="orchestrate-workbench-empty">本轮无编排过程</p>
+          </div>
+        </aside>
+        <div id="orchestrateWorkbenchBackdrop" class="orchestrate-workbench-backdrop" hidden></div>
       </div>
     </div>
 
@@ -138,9 +150,9 @@
     </div>
   </div>
 
-  <script src="auth.js"></script>
+  <script src="auth.js?v=20260906case1"></script>
   <script src="admin_kb_files.js?v=20260905preview"></script>
-  <script src="mcp_client.js?v=20260905casectx2"></script>
+  <script src="mcp_client.js?v=20260906case1"></script>
 </body>
 </html>
 

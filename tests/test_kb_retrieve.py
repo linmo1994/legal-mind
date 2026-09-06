@@ -10,6 +10,7 @@ from http_api_extra import (  # noqa: E402
     format_kb_hits,
     hits_to_citations,
     make_kb_retrieve_fn,
+    prefer_hits_matching_articles,
 )
 
 
@@ -53,6 +54,42 @@ class TestKbRetrieve(unittest.TestCase):
         self.assertEqual(c["article"], "第六十四条")
         self.assertEqual(len(c["snippet"]), 400)
         self.assertAlmostEqual(c["rrf_score"], 0.032)
+
+    def test_hits_to_citations_does_not_stamp_query_article_on_wrong_chunk(self):
+        """Query asks for 第64条 but hit text is 第38条 — do not label as 第六十四条."""
+        hits = [
+            {
+                "id": "chunk_38",
+                "document": "第三十八条 用人单位有下列情形之一的……第四十条 ……",
+                "metadata": {
+                    "doc_type": "law",
+                    "document_id": "doc1",
+                    "file_id": "f-law-1",
+                    "title": "中华人民共和国劳动合同法",
+                },
+            }
+        ]
+        cites = hits_to_citations(hits, "帮我检索劳动合同法第64条")
+        self.assertEqual(len(cites), 1)
+        # Must reflect content, not the query stamp
+        self.assertNotIn(cites[0].get("article") or "", ("第六十四条", "第64条"))
+        self.assertIn("三十八", cites[0].get("article") or "")
+
+    def test_prefer_hits_matching_query_article(self):
+        hits = [
+            {
+                "id": "a",
+                "document": "第三十八条 ……",
+                "metadata": {"title": "劳动合同法"},
+            },
+            {
+                "id": "b",
+                "document": "第六十四条 非全日制用工……",
+                "metadata": {"title": "劳动合同法"},
+            },
+        ]
+        ordered = prefer_hits_matching_articles(hits, "检索劳动合同法第六十四条")
+        self.assertEqual(ordered[0]["id"], "b")
 
     def test_hits_to_citations_dedupes_same_file_article(self):
         hits = [
@@ -120,6 +157,9 @@ class TestKbRetrieve(unittest.TestCase):
         self.assertIn("判决要旨", out["cases"])
         self.assertEqual(vs.search.call_args_list[0].kwargs.get("where"), {"doc_type": "law"})
         self.assertEqual(vs.search.call_args_list[1].kwargs.get("where"), {"doc_type": "case"})
+        # Article in query → expand recall pool before prefer/truncate
+        self.assertEqual(vs.search.call_args_list[0].kwargs.get("n_results"), 20)
+        self.assertEqual(vs.search.call_args_list[1].kwargs.get("n_results"), 20)
         self.assertEqual(len(out["law_citations"]), 1)
         self.assertEqual(out["law_citations"][0]["file_id"], "f1")
         self.assertEqual(out["law_citations"][0]["title"], "X法")

@@ -148,7 +148,12 @@ function initElements() {
   toolApprovalModal: document.getElementById('toolApprovalModal'),
   toolApprovalInfo: document.getElementById('toolApprovalInfo'),
   approveToolBtn: document.getElementById('approveToolBtn'),
-  rejectToolBtn: document.getElementById('rejectToolBtn')
+  rejectToolBtn: document.getElementById('rejectToolBtn'),
+  orchestrateWorkbench: document.getElementById('orchestrateWorkbench'),
+  orchestrateWorkbenchBody: document.getElementById('orchestrateWorkbenchBody'),
+  orchestrateWorkbenchToggle: document.getElementById('orchestrateWorkbenchToggle'),
+  orchestrateWorkbenchClose: document.getElementById('orchestrateWorkbenchClose'),
+  orchestrateWorkbenchBackdrop: document.getElementById('orchestrateWorkbenchBackdrop')
 };
   
   // 验证关键元素是否存在
@@ -454,6 +459,7 @@ async function init() {
       throw new Error('DOM元素初始化失败，请检查HTML结构');
     }
     console.log('✅ DOM元素初始化成功');
+    initOrchestrateWorkbenchUi();
     setupHomeBackTab();
     
     // 加载配置（使用缓存）
@@ -1276,6 +1282,13 @@ async function sendMCPRequest(request, retries = 0) {
 
 // 调用LLM（通过服务端代理，支持流式输出）
 // 现在直接接受requestData，由服务端负责构建messages数组
+function clearGenerationStateUnlessBusy() {
+  if (window.BusyController && BusyController.isBusy()) return;
+  isGenerating = false;
+  currentAbortController = null;
+  setStopButtonState(false);
+}
+
 async function callLLM(requestData, onStreamChunk = null, retries = 0) {
   // 将timeoutId提升到函数作用域，确保在catch块中也能访问
   let timeoutId = null;
@@ -1299,9 +1312,10 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
     
     updateStatus('正在思考...', 'connecting');
     
-    const controller = new AbortController();
-    // 保存到全局变量，以便停止生成时使用
-    currentAbortController = controller;
+    const controller = currentAbortController || new AbortController();
+    if (!currentAbortController) {
+      currentAbortController = controller;
+    }
     isGenerating = true;
     setStopButtonState(true); // 切换到"停止生成"按钮
     timeoutId = setTimeout(() => {
@@ -1452,10 +1466,7 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
           const { done, value } = await reader.read();
           if (done) {
             console.log('流式读取完成，总块数:', chunkCount, '内容长度:', fullContent.length);
-            // 流式读取完成，恢复发送按钮
-            isGenerating = false;
-            currentAbortController = null;
-            setStopButtonState(false);
+            clearGenerationStateUnlessBusy();
             break;
           }
           
@@ -1474,10 +1485,7 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
                 console.log('收到流式结束标记');
                 updateStatus('就绪', 'connected');
                 console.log('流式内容总长度:', fullContent.length);
-                // 流式读取完成，恢复发送按钮
-                isGenerating = false;
-                currentAbortController = null;
-                setStopButtonState(false);
+                clearGenerationStateUnlessBusy();
                 return fullContent;
               }
               
@@ -1626,10 +1634,7 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
         if (fullContent.length === 0) {
           console.error('警告：流式响应内容为空！');
         }
-        // 确保发送按钮可用（如果之前没有在[DONE]或done时调用）
-        isGenerating = false;
-        currentAbortController = null;
-        setStopButtonState(false);
+        clearGenerationStateUnlessBusy();
         return fullContent;
       } catch (streamError) {
         console.error('流式处理错误:', streamError);
@@ -1637,10 +1642,7 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
         if (typeof timeoutId !== 'undefined') {
           clearTimeout(timeoutId);
         }
-        // 流式处理出错时也要重置按钮
-        isGenerating = false;
-        currentAbortController = null;
-        setStopButtonState(false);
+        clearGenerationStateUnlessBusy();
         throw streamError;
       } finally {
         reader.releaseLock();
@@ -1655,10 +1657,7 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
       }
       
     updateStatus('就绪', 'connected');
-    // 非流式处理完成，重置按钮
-    isGenerating = false;
-    currentAbortController = null;
-    setStopButtonState(false);
+    clearGenerationStateUnlessBusy();
     return data.choices[0].message.content;
     }
   } catch (error) {
@@ -1674,10 +1673,7 @@ async function callLLM(requestData, onStreamChunk = null, retries = 0) {
     // 超时停止：超时定时器直接调用abort()，此时currentAbortController还未被清空
     const wasUserStopped = !currentAbortController;
     
-    // 错误时也要重置按钮状态
-    isGenerating = false;
-    currentAbortController = null;
-    setStopButtonState(false);
+    clearGenerationStateUnlessBusy();
     
     if (error.name === 'AbortError') {
       // 检查是否是用户主动停止
@@ -2373,15 +2369,17 @@ window.handleUserInput = async function(userInputText = null) {
 
   const orchestrated = await tryHandleOrchestrate(fullUserMessage);
   if (orchestrated) {
+    if (window.BusyController && BusyController.isBusy()) BusyController.end({ reason: 'success' });
     isGenerating = false;
-    currentAbortController = null;
-    if (typeof setStopButtonState === 'function') setStopButtonState(false);
     isProcessingInput = false;
     return;
   }
 
   // 初始化流式消息容器
   const streamingMsg = addStreamingMessage();
+  const streamMount = streamingMsg.messageWrapper;
+  let streamBusyStagesRemoved = false;
+  BusyController.start({ mode: 'stream', mountEl: streamMount });
   let accumulatedContent = '';
   let thinkingContent = '';
   let conclusionContent = '';
@@ -2502,6 +2500,15 @@ window.handleUserInput = async function(userInputText = null) {
       console.log('更新流式消息，思考内容:', thinkingContent ? '有(' + thinkingContent.length + '字符)' : '无', 
                   '结论内容:', conclusionContent ? '有(' + conclusionContent.length + '字符)' : '无');
       updateStreamingMessage(thinkingContent, conclusionContent);
+      if (!streamBusyStagesRemoved) {
+        const substantial = (thinkingContent && thinkingContent.trim()) ||
+          (conclusionContent && conclusionContent.trim()) ||
+          (content && content.trim());
+        if (substantial) {
+          removeBusyStages(streamMount);
+          streamBusyStagesRemoved = true;
+        }
+      }
     };
     
     console.log('步骤2.5: 准备调用callLLM函数');
@@ -2529,10 +2536,13 @@ window.handleUserInput = async function(userInputText = null) {
       console.error('错误：LLM响应为空！');
       finalizeStreamingMessage();
       showError('LLM返回空响应，请重试或检查服务状态');
-      // 确保发送按钮可用（虽然finally块也会执行，但这里明确调用更安全）
-      isGenerating = false;
-      currentAbortController = null;
-      setStopButtonState(false);
+      if (window.BusyController && BusyController.isBusy()) {
+        BusyController.end({ reason: 'error' });
+      } else {
+        isGenerating = false;
+        currentAbortController = null;
+        setStopButtonState(false);
+      }
       return;
     }
     
@@ -2592,10 +2602,13 @@ window.handleUserInput = async function(userInputText = null) {
     await parseAndHandleResponse(llmResponse, true, finalThinkingContent, finalConclusionContent);
     
     console.log('=== 处理完成 ===');
-    // 确保发送按钮可用（虽然finally块也会执行，但这里明确调用更安全）
-    isGenerating = false;
-    currentAbortController = null;
-    setStopButtonState(false);
+    if (window.BusyController && BusyController.isBusy()) {
+      BusyController.end({ reason: 'success' });
+    } else {
+      isGenerating = false;
+      currentAbortController = null;
+      setStopButtonState(false);
+    }
     
   } catch (error) {
     console.error('=== 处理用户输入失败 ===');
@@ -2604,28 +2617,44 @@ window.handleUserInput = async function(userInputText = null) {
     console.error('错误类型:', error.name);
     console.error('错误消息:', error.message);
     
-    // 错误时重置按钮状态
-    isGenerating = false;
-    currentAbortController = null;
-    setStopButtonState(false);
-    
-    // 移除流式消息（如果存在）
-    finalizeStreamingMessage();
-    
-    let errorMessage = error.message;
-    
-    // 根据错误类型提供更友好的提示
-    if (errorMessage.includes('无法连接')) {
-      errorMessage = '网络连接失败，请检查：\n1. MCP服务是否已启动（端口8000）\n2. 网络连接是否正常\n3. 防火墙设置';
-    } else if (errorMessage.includes('API认证失败') || errorMessage.includes('API Key')) {
-      errorMessage = 'LLM API配置错误，请检查config.json中的api_key配置';
-    } else if (errorMessage.includes('超时')) {
-      errorMessage = '请求超时，请稍后重试或检查服务状态';
+    const wasAbort =
+      error.message === '生成已停止' ||
+      error.name === 'AbortError' ||
+      (String(error.message || '').toLowerCase().indexOf('abort') >= 0);
+    if (window.BusyController && BusyController.isBusy()) {
+      BusyController.end({ reason: wasAbort ? 'abort' : 'error' });
+    } else {
+      isGenerating = false;
+      currentAbortController = null;
+      setStopButtonState(false);
     }
-    
-    showError('处理失败: ' + errorMessage);
-    updateStatus('错误', 'disconnected');
+
+    if (!wasAbort) {
+      // 移除流式消息（如果存在）
+      finalizeStreamingMessage();
+
+      let errorMessage = error.message;
+
+      // 根据错误类型提供更友好的提示
+      if (errorMessage.includes('无法连接')) {
+        errorMessage = '网络连接失败，请检查：\n1. MCP服务是否已启动（端口8000）\n2. 网络连接是否正常\n3. 防火墙设置';
+      } else if (errorMessage.includes('API认证失败') || errorMessage.includes('API Key')) {
+        errorMessage = 'LLM API配置错误，请检查config.json中的api_key配置';
+      } else if (errorMessage.includes('超时')) {
+        errorMessage = '请求超时，请稍后重试或检查服务状态';
+      }
+
+      showError('处理失败: ' + errorMessage);
+      updateStatus('错误', 'disconnected');
+    } else if (currentStreamingMessage) {
+      currentStreamingMessage.classList.remove('streaming');
+      currentStreamingMessage.classList.add('stopped');
+      currentStreamingMessage = null;
+    }
   } finally {
+    if (window.BusyController && BusyController.isBusy()) {
+      BusyController.end({ reason: 'success' });
+    }
     // 重置处理标记，确保无论函数如何退出，标记都会被重置
     isProcessingInput = false;
     console.log('✅ handleUserInput处理完成，已重置isProcessingInput标记');
@@ -2740,7 +2769,12 @@ function setStopButtonState(isStopping) {
 // 停止生成函数（全局可访问）
 window.stopGeneration = function stopGeneration() {
   console.log('停止生成被调用');
-  
+
+  if (window.BusyController && BusyController.isBusy()) {
+    BusyController.abort();
+    return;
+  }
+
   if (currentAbortController) {
     console.log('正在取消请求...');
     // 先清空currentAbortController，标记为用户主动停止
@@ -4221,6 +4255,10 @@ async function loadActiveCaseOptions() {
   if (!resp.ok) throw new Error('cases HTTP ' + resp.status);
   const data = await resp.json();
   sel.innerHTML = '<option value="">请选择案件…</option>';
+  const allOpt = document.createElement('option');
+  allOpt.value = '*';
+  allOpt.textContent = '全选（我有权限的案件）';
+  sel.appendChild(allOpt);
   (data.cases || []).forEach(function (c) {
     const opt = document.createElement('option');
     opt.value = String(c.id);
@@ -4230,20 +4268,27 @@ async function loadActiveCaseOptions() {
   });
   // 默认：保留已选案件（首页跳转 / 刷新后仍可用）；否则不选中
   const prevCaseId = LegalMindAuth.getCaseId();
-  const prevStr = prevCaseId != null ? String(prevCaseId) : '';
-  const hasPrev = prevStr && Array.prototype.some.call(sel.options, function (o) {
-    return o.value === prevStr;
-  });
-  if (hasPrev) {
-    sel.value = prevStr;
-    LegalMindAuth.setCaseId(prevCaseId);
+  if (prevCaseId === '*') {
+    sel.value = '*';
+    LegalMindAuth.setCaseId('*');
   } else {
-    sel.value = '';
-    if (prevCaseId != null) LegalMindAuth.setCaseId(null);
+    const prevStr = prevCaseId != null ? String(prevCaseId) : '';
+    const hasPrev = prevStr && Array.prototype.some.call(sel.options, function (o) {
+      return o.value === prevStr;
+    });
+    if (hasPrev) {
+      sel.value = prevStr;
+      LegalMindAuth.setCaseId(prevCaseId);
+    } else {
+      sel.value = '';
+      if (prevCaseId != null) LegalMindAuth.setCaseId(null);
+    }
   }
   sel.onchange = function () {
-    const v = sel.value ? parseInt(sel.value, 10) : null;
-    LegalMindAuth.setCaseId(v);
+    const raw = sel.value;
+    if (raw === '*') LegalMindAuth.setCaseId('*');
+    else if (!raw) LegalMindAuth.setCaseId(null);
+    else LegalMindAuth.setCaseId(parseInt(raw, 10));
   };
 }
 
@@ -4253,27 +4298,45 @@ function tryHandleOrchestrate(fullUserMessage) {
     let shell = null;
 
     async function applyOrchestrateSuccess(targetShell, data, userMessage) {
+      if (targetShell && targetShell.content) removeBusyStages(targetShell.content);
       const flow = (data.capabilities && data.capabilities.flow) || data.flow || [];
       if (typeof currentStreamingMessage !== 'undefined' && currentStreamingMessage) {
         try { currentStreamingMessage.remove(); } catch (e) {}
         currentStreamingMessage = null;
       }
-      paintOrchestrateFlow(targetShell.flowSlot, flow, flow.length, -1);
+      registerOrchestrateTurn(targetShell, data);
+      if (data.status === 'awaiting_user') {
+        window.__orchestrateResumeState = data.resume_state || null;
+      } else {
+        // complete or other terminal success — clear; keep only while awaiting_user
+        window.__orchestrateResumeState = null;
+      }
       const answer = ((data.visible_text || '') + (data.pending_question ? '\n\n' + data.pending_question : '')).trim();
-      if (!answer && !flow.length) {
+      if (!answer && !flow.length && !(data.plan && (data.plan.length || (data.plan.steps && data.plan.steps.length))) && !(data.past_steps && data.past_steps.length)) {
         return false;
       }
       if (targetShell.answer) {
         targetShell.answer.hidden = !answer;
-        targetShell.answer.textContent = answer;
+        renderAssistantAnswerWithCitations(
+          targetShell.answer,
+          answer,
+          collectOrchestrateCitations(data),
+          targetShell.content
+        );
       } else {
         targetShell.content.hidden = false;
-        targetShell.content.textContent = answer;
+        renderAssistantAnswerWithCitations(
+          targetShell.content,
+          answer,
+          collectOrchestrateCitations(data),
+          targetShell.content
+        );
+      }
+      renderExternalSearchHint(targetShell.content, data.external_search);
+      if (targetShell.wrap) {
+        attachOrchestrateTurnTab(targetShell, targetShell.wrap.getAttribute('data-turn-id'));
       }
       const citations = collectOrchestrateCitations(data);
-      if (citations.length && targetShell.content) {
-        renderOrchestrateCitations(targetShell.content, citations);
-      }
       if (data.artifact && data.artifact.file_id) {
         addOrchestrateDownload(data.artifact);
       }
@@ -4283,13 +4346,21 @@ function tryHandleOrchestrate(fullUserMessage) {
           role: 'assistant',
           content: data.visible_text,
           artifact: data.artifact || undefined,
-          capabilities: data.capabilities || undefined
+          capabilities: data.capabilities || undefined,
+          citations: citations.length ? citations : undefined,
+          plan: data.plan,
+          past_steps: data.past_steps,
+          status: data.status
         });
         if (currentSession.sessionId && typeof addMessageToServer === 'function' && !data.saved_to_session) {
           addMessageToServer(currentSession.sessionId, 'user', userMessage).catch(() => {});
           const extra = {};
           if (data.artifact) extra.artifact = data.artifact;
           if (data.capabilities) extra.capabilities = data.capabilities;
+          if (citations.length) extra.citations = citations;
+          if (data.plan) extra.plan = data.plan;
+          if (data.past_steps) extra.past_steps = data.past_steps;
+          if (data.status) extra.status = data.status;
           addMessageToServer(currentSession.sessionId, 'assistant', data.visible_text, Object.keys(extra).length ? extra : null).catch(() => {});
         }
         if (typeof saveSession === 'function') {
@@ -4300,19 +4371,21 @@ function tryHandleOrchestrate(fullUserMessage) {
       return true;
     }
 
-    function doRequest() {
+    function doRequest(signal) {
       return fetch(`${CONFIG.mcpServerUrl}/api/orchestrate`, {
         method: 'POST',
         headers: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
           ? LegalMindAuth.authHeaders()
           : { 'Content-Type': 'application/json' },
+        signal: signal,
         body: JSON.stringify({
           user_text: fullUserMessage,
           session_id: currentSession && currentSession.sessionId,
           messages: (currentSession && currentSession.conversationHistory) || [],
           case_id: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.getCaseId)
             ? LegalMindAuth.getCaseId()
-            : null
+            : null,
+          resume_state: (typeof window !== 'undefined' && window.__orchestrateResumeState) || undefined
         })
       });
     }
@@ -4323,33 +4396,48 @@ function tryHandleOrchestrate(fullUserMessage) {
       btn.onclick = async function () {
         btn.disabled = true;
         btn.textContent = '重试中…';
+        const controller = BusyController.start({ mode: 'orchestrate', mountEl: targetShell.content });
+        clearOrchestrateRetry(targetShell);
         try {
-          const resp = await doRequest();
+          const resp = await doRequest(controller.signal);
           if (resp.status === 401) {
+            BusyController.end({ reason: 'error' });
             if (typeof LegalMindAuth !== 'undefined') LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
             if (targetShell && targetShell.wrap) targetShell.wrap.remove();
             return;
           }
           if (!resp.ok) {
             const errBody = await resp.json().catch(function () { return {}; });
+            BusyController.end({ reason: 'error' });
             attachRetry(targetShell, errBody.error || ('请求失败 ' + resp.status));
             return;
           }
           const data = await resp.json();
           if (data && data.legacy) {
+            BusyController.end({ reason: 'error' });
             attachRetry(targetShell, '当前请求需走旧路径，请刷新页面后重发。');
             return;
           }
           if (!data) {
+            BusyController.end({ reason: 'error' });
             attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
             return;
           }
           clearOrchestrateRetry(targetShell);
+          const realStages = buildBusyStagesFromOrchestrate(data);
+          if (realStages) BusyController.updateStages(realStages);
           const ok = await applyOrchestrateSuccess(targetShell, data, fullUserMessage);
           if (!ok) {
+            BusyController.end({ reason: 'error' });
             attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
+            return;
           }
+          BusyController.end({ reason: 'success' });
         } catch (e) {
+          if (e && (e.name === 'AbortError' || e.code === 20)) {
+            return;
+          }
+          BusyController.end({ reason: 'error' });
           attachRetry(targetShell, e.message || '服务暂时不可用，请稍后重试。');
         }
       };
@@ -4357,36 +4445,49 @@ function tryHandleOrchestrate(fullUserMessage) {
 
     try {
       shell = addOrchestrateProgressShell();
+      const controller = BusyController.start({ mode: 'orchestrate', mountEl: shell.content });
       paintOrchestrateFlow(shell.flowSlot, [], 0, -1);
-      const resp = await doRequest();
+      const resp = await doRequest(controller.signal);
       if (resp.status === 401) {
+        BusyController.end({ reason: 'error' });
         if (typeof LegalMindAuth !== 'undefined') LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
         if (shell && shell.wrap) shell.wrap.remove();
         return true;
       }
       if (!resp.ok) {
         const errBody = await resp.json().catch(function () { return {}; });
+        BusyController.end({ reason: 'error' });
         attachRetry(shell, errBody.error || ('请求失败 ' + resp.status));
         return true;
       }
       const data = await resp.json();
       if (data && data.legacy) {
+        BusyController.end({ reason: 'success' });
         if (shell && shell.wrap) shell.wrap.remove();
         return false;
       }
       if (!data) {
+        BusyController.end({ reason: 'error' });
         attachRetry(shell, '服务暂时不可用，请稍后重试。');
         return true;
       }
+      const realStages = buildBusyStagesFromOrchestrate(data);
+      if (realStages) BusyController.updateStages(realStages);
       const ok = await applyOrchestrateSuccess(shell, data, fullUserMessage);
       if (!ok) {
+        BusyController.end({ reason: 'error' });
         attachRetry(shell, '服务暂时不可用，请稍后重试。');
         return true;
       }
+      BusyController.end({ reason: 'success' });
       return true;
     } catch (err) {
+      if (err && (err.name === 'AbortError' || err.code === 20)) {
+        return true;
+      }
       console.warn('orchestrate failed; showing retry:', err);
       if (!shell) shell = addOrchestrateProgressShell();
+      if (BusyController.isBusy()) BusyController.end({ reason: 'error' });
       attachRetry(shell, err.message || '服务暂时不可用，请稍后重试。');
       return true;
     }
@@ -4662,10 +4763,15 @@ function addOrchestrateProgressShell() {
   contentDiv.className = 'message-content';
   const flowSlot = document.createElement('div');
   flowSlot.className = 'orchestrate-flow-slot';
+  flowSlot.hidden = true;
+  const planSlot = document.createElement('div');
+  planSlot.className = 'orchestrate-plan-slot';
+  planSlot.hidden = true;
   const answerEl = document.createElement('div');
   answerEl.className = 'orchestrate-answer';
   answerEl.hidden = true;
   contentDiv.appendChild(flowSlot);
+  contentDiv.appendChild(planSlot);
   contentDiv.appendChild(answerEl);
   messageDiv.appendChild(headerDiv);
   messageDiv.appendChild(contentDiv);
@@ -4673,37 +4779,779 @@ function addOrchestrateProgressShell() {
     elements.chatMessages.appendChild(messageDiv);
     elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
   }
-  return { wrap: messageDiv, flowSlot: flowSlot, content: contentDiv, answer: answerEl };
+  return { wrap: messageDiv, flowSlot: flowSlot, planSlot: planSlot, content: contentDiv, answer: answerEl };
+}
+
+function paintOrchestratePlan(slot, data) {
+  if (!slot) return;
+  const past = (data && data.past_steps) || [];
+  const plan = (data && data.plan) || [];
+  // note: plan from PnE is string[]; past_steps is [{step, observation, tool?}, ...]
+  if (!past.length && !plan.length) {
+    slot.hidden = true;
+    slot.innerHTML = '';
+    return;
+  }
+  slot.hidden = false;
+  let html = '<div class="orchestrate-plan"><div class="orchestrate-plan-title">执行计划</div><ol>';
+  past.forEach(function (p) {
+    const label = (p && (p.step || p)) || '';
+    html += '<li class="done">' + escapeHtml(String(label)) + '</li>';
+  });
+  plan.forEach(function (step, i) {
+    const cls = (i === 0 && data.status !== 'complete') ? 'current' : 'todo';
+    html += '<li class="' + cls + '">' + escapeHtml(String(step)) + '</li>';
+  });
+  html += '</ol>';
+  if (data.status === 'awaiting_user') {
+    html += '<div class="orchestrate-plan-wait">等待你的补充</div>';
+  }
+  html += '</div>';
+  slot.innerHTML = html;
+}
+
+/** @type {Map<string, object>} */
+const orchestrateTurnViews = new Map();
+let selectedOrchestrateTurnId = null;
+let orchestrateTurnSeq = 0;
+
+function nextOrchestrateTurnId() {
+  orchestrateTurnSeq += 1;
+  return 'orch-turn-' + orchestrateTurnSeq + '-' + Date.now();
+}
+
+function excerptObservation(text, limit) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  const max = limit || 200;
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + '…';
+}
+
+function buildOrchestrateTurnView(turnId, data) {
+  const flow = (data && data.capabilities && data.capabilities.flow) || (data && data.flow) || [];
+  const past = Array.isArray(data && data.past_steps) ? data.past_steps : [];
+  let plan = data && data.plan;
+  if (plan && typeof plan === 'object' && !Array.isArray(plan)) {
+    plan = Array.isArray(plan.steps)
+      ? plan.steps.map(function (s) {
+          if (typeof s === 'string') return s;
+          return (s && (s.agent || s.name || s.step)) || JSON.stringify(s);
+        })
+      : [];
+  }
+  if (!Array.isArray(plan)) plan = [];
+  const observations = past
+    .map(function (p) {
+      const step = (p && (p.step || p)) || '';
+      const excerpt = excerptObservation(p && p.observation);
+      if (!excerpt) return null;
+      return { step: String(step), excerpt: excerpt };
+    })
+    .filter(Boolean);
+  return {
+    turnId: turnId,
+    plan: plan.map(String),
+    past_steps: past,
+    status: (data && data.status) || 'complete',
+    pending_question: (data && data.pending_question) || '',
+    flow: Array.isArray(flow) ? flow : [],
+    observations: observations,
+    replan_count: (data && data.replan_count) || 0,
+    external_search: (data && data.external_search) || null
+  };
+}
+
+function kindBadgeClass(kind) {
+  const k = String(kind || '').toLowerCase();
+  if (k === 'skill') return 'kind-skill';
+  if (k === 'mcp') return 'kind-mcp';
+  if (k === 'kb' || k === 'knowledge') return 'kind-kb';
+  if (k === 'tool' || k === 'plan_step') return 'kind-tool';
+  if (k === 'agent') return 'kind-agent';
+  if (k === 'external') return 'kind-external';
+  return '';
+}
+
+function orchestrateToolMeta(tool) {
+  const t = String(tool || '').trim();
+  const map = {
+    retrieve_law: { kind: 'kb', label: '本地知识库 · 法规' },
+    retrieve_case: { kind: 'kb', label: '本地知识库 · 类案' },
+    read_evidence: { kind: 'kb', label: '案件材料 · 证据' },
+    draft_doc: { kind: 'tool', label: '文书起草' },
+    reason: { kind: 'tool', label: '推理综合' },
+    ask_user: { kind: 'tool', label: '询问用户' }
+  };
+  return map[t] || { kind: 'tool', label: t || '工具' };
+}
+
+const BUSY_PLACEHOLDER_LABELS = ['理解问题', '处理中', '整理回答'];
+
+function buildPlaceholderBusyStages() {
+  return [
+    { id: 'p1', label: BUSY_PLACEHOLDER_LABELS[0], status: 'done' },
+    { id: 'p2', label: BUSY_PLACEHOLDER_LABELS[1], status: 'current' },
+    { id: 'p3', label: BUSY_PLACEHOLDER_LABELS[2], status: 'todo' }
+  ];
+}
+
+function buildBusyStagesFromOrchestrate(data) {
+  const stages = [];
+  const flow = (data && data.capabilities && data.capabilities.flow) || (data && data.flow) || [];
+  if (Array.isArray(flow) && flow.length) {
+    flow.forEach(function (item, i) {
+      if (!item || typeof item !== 'object') return;
+      const kind = String(item.kind || '').toLowerCase();
+      if (kind === 'plan_step' || kind === 'plan') return;
+      const st = String(item.status || '').toLowerCase();
+      let status = 'todo';
+      if (st === 'done') status = 'done';
+      else if (st === 'running') status = 'current';
+      stages.push({
+        id: String(item.id || kind || i),
+        label: String(item.name || item.id || kind || '步骤'),
+        status: status
+      });
+    });
+  }
+  if (!stages.length && data && Array.isArray(data.past_steps) && data.past_steps.length) {
+    data.past_steps.forEach(function (p, i) {
+      if (!p) return;
+      const meta = typeof orchestrateToolMeta === 'function' && p.tool
+        ? orchestrateToolMeta(p.tool)
+        : { label: p.tool || '工具' };
+      const step = String(p.step || '').trim();
+      stages.push({
+        id: 'past-' + i,
+        label: step ? meta.label + ' — ' + step : meta.label,
+        status: 'done'
+      });
+    });
+    if (stages.length) {
+      stages.push({ id: 'wrap', label: '整理回答', status: 'current' });
+    }
+  }
+  if (!stages.length) return null;
+  // Ensure at least one current if all done
+  const hasCurrent = stages.some(function (s) { return s.status === 'current'; });
+  if (!hasCurrent) {
+    const last = stages[stages.length - 1];
+    if (last && last.status === 'todo') last.status = 'current';
+  }
+  return stages;
+}
+
+function renderBusyStages(containerEl, stages) {
+  if (!containerEl) return null;
+  let root = containerEl.querySelector(':scope > .busy-stages');
+  if (!root) {
+    root = document.createElement('div');
+    root.className = 'busy-stages';
+    root.setAttribute('aria-live', 'polite');
+    containerEl.insertBefore(root, containerEl.firstChild);
+  }
+  root.setAttribute('aria-busy', 'true');
+  root.innerHTML = '';
+  (stages || []).forEach(function (s) {
+    const row = document.createElement('div');
+    const st = (s && s.status) || 'todo';
+    row.className = 'busy-stage is-' + st;
+    const dot = document.createElement('span');
+    dot.className = 'busy-stage-dot';
+    const label = document.createElement('span');
+    label.className = 'busy-stage-label';
+    label.textContent = (s && s.label) || '';
+    row.appendChild(dot);
+    row.appendChild(label);
+    root.appendChild(row);
+  });
+  return root;
+}
+
+function removeBusyStages(containerEl) {
+  if (!containerEl) return;
+  const root = containerEl.querySelector(':scope > .busy-stages');
+  if (root) root.remove();
+  containerEl.querySelectorAll('.busy-aborted-note').forEach(function (n) { n.remove(); });
+}
+
+const BusyController = (function () {
+  let busy = false;
+  let mode = null;
+  let mountEl = null;
+  let ownedController = null;
+
+  function setInputDisabled(disabled) {
+    if (elements && elements.userInput) {
+      elements.userInput.disabled = !!disabled;
+    }
+  }
+
+  function start(opts) {
+    opts = opts || {};
+    busy = true;
+    mode = opts.mode || 'orchestrate';
+    mountEl = opts.mountEl || null;
+    isGenerating = true;
+    isProcessingInput = true;
+    if (opts.abortController) {
+      ownedController = opts.abortController;
+      currentAbortController = ownedController;
+    } else {
+      ownedController = new AbortController();
+      currentAbortController = ownedController;
+    }
+    setInputDisabled(true);
+    if (typeof setStopButtonState === 'function') setStopButtonState(true);
+    if (typeof updateStatus === 'function') updateStatus('正在处理…', 'connecting');
+    if (mountEl) renderBusyStages(mountEl, buildPlaceholderBusyStages());
+    if (elements && elements.sendBtn) {
+      elements.sendBtn.onclick = function () {
+        BusyController.abort();
+      };
+    }
+    return ownedController;
+  }
+
+  function updateStages(stages) {
+    if (!busy || !mountEl || !stages) return;
+    renderBusyStages(mountEl, stages);
+  }
+
+  function end(opts) {
+    opts = opts || {};
+    const reason = opts.reason || 'success';
+    busy = false;
+    const el = mountEl;
+    mountEl = null;
+    mode = null;
+    ownedController = null;
+    currentAbortController = null;
+    isGenerating = false;
+    isProcessingInput = false;
+    setInputDisabled(false);
+    if (typeof setStopButtonState === 'function') setStopButtonState(false);
+    if (typeof updateStatus === 'function') {
+      updateStatus(reason === 'abort' ? '已停止生成' : (reason === 'error' ? '请求失败' : '就绪'), 'connected');
+    }
+    if (el) {
+      if (reason === 'abort') {
+        removeBusyStages(el);
+        const note = document.createElement('div');
+        note.className = 'busy-aborted-note';
+        note.textContent = '已停止生成';
+        el.insertBefore(note, el.firstChild);
+      } else if (reason === 'success') {
+        removeBusyStages(el);
+      } else {
+        removeBusyStages(el);
+      }
+    }
+    if (typeof window.updateSendButtonState === 'function') {
+      setTimeout(function () { window.updateSendButtonState(); }, 0);
+    }
+  }
+
+  function abort() {
+    if (!busy) return;
+    const c = ownedController || currentAbortController;
+    ownedController = null;
+    currentAbortController = null;
+    if (c) {
+      try { c.abort(); } catch (e) {}
+    }
+    end({ reason: 'abort' });
+  }
+
+  function isBusy() { return busy; }
+
+  return { start: start, updateStages: updateStages, end: end, abort: abort, isBusy: isBusy };
+})();
+window.BusyController = BusyController;
+
+function timelineExcerptFromPast(p) {
+  return excerptObservation(p && p.observation);
+}
+
+function timelineExcerptFromFlow(item, view) {
+  const d = (item && item.detail) || null;
+  if (d && d.observation) return excerptObservation(d.observation);
+  if (d && d.note) return excerptObservation(d.note);
+  const kind = String((item && item.kind) || '').toLowerCase();
+  if (kind === 'external') {
+    const es = (view && view.external_search) || {};
+    const note = String(es.note || '本地知识库未命中；未自动抓取外网正文，请打开官网核对。');
+    const q = String((d && d.query) || es.query || '').trim();
+    return excerptObservation(q ? note + ' 检索词：' + q : note);
+  }
+  return '';
+}
+
+function buildWorkbenchTimeline(view) {
+  const items = [];
+  const seen = {};
+  function pushItem(item) {
+    if (!item) return;
+    const key = [item.kind, item.id, item.name].join('|');
+    if (seen[key]) return;
+    seen[key] = true;
+    if (item.excerpt) item.excerpt = String(item.excerpt);
+    else delete item.excerpt;
+    items.push(item);
+  }
+
+  (view.past_steps || []).forEach(function (p) {
+    if (!p || !p.tool) return;
+    const meta = orchestrateToolMeta(p.tool);
+    const step = String(p.step || '').trim();
+    const excerpt = timelineExcerptFromPast(p);
+    const row = {
+      kind: meta.kind,
+      id: p.tool,
+      name: step ? meta.label + ' — ' + step : meta.label
+    };
+    if (excerpt) row.excerpt = excerpt;
+    pushItem(row);
+  });
+
+  (view.flow || []).forEach(function (item) {
+    if (!item || typeof item !== 'object') return;
+    const kind = String(item.kind || '').toLowerCase();
+    if (kind === 'plan_step' || kind === 'plan') return;
+    if (item.status === 'running') return;
+    const excerpt = timelineExcerptFromFlow(item, view);
+    const row = {
+      kind: kind || 'step',
+      id: item.id || '',
+      name: item.name || item.id || kind
+    };
+    if (excerpt) row.excerpt = excerpt;
+    pushItem(row);
+  });
+
+  return items;
+}
+
+function renderOrchestrateWorkbench() {
+  const body = (elements && elements.orchestrateWorkbenchBody) ||
+    document.getElementById('orchestrateWorkbenchBody');
+  if (!body) return;
+  const view = selectedOrchestrateTurnId
+    ? orchestrateTurnViews.get(selectedOrchestrateTurnId)
+    : null;
+  if (!view) {
+    body.innerHTML = '<p class="orchestrate-workbench-empty">本轮无编排过程</p>';
+    return;
+  }
+
+  let html = '';
+  html += '<div class="orchestrate-wb-section"><div class="orchestrate-wb-section-title">执行计划';
+  if (view.replan_count > 0) html += ' · 已更新';
+  html += '</div>';
+  const past = view.past_steps || [];
+  const plan = view.plan || [];
+  if (!past.length && !plan.length) {
+    html += '<p class="orchestrate-workbench-empty" style="margin:8px 0">暂无计划步骤</p>';
+  } else {
+    html += '<div class="orchestrate-plan"><ol>';
+    past.forEach(function (p) {
+      const label = (p && (p.step || p)) || '';
+      const tool = p && p.tool ? orchestrateToolMeta(p.tool).label : '';
+      html += '<li class="done">' + escapeHtml(String(label)) +
+        (tool ? ' <span class="orchestrate-plan-tool">(' + escapeHtml(tool) + ')</span>' : '') +
+        '</li>';
+    });
+    plan.forEach(function (step, i) {
+      const cls = (i === 0 && view.status !== 'complete') ? 'current' : 'todo';
+      html += '<li class="' + cls + '">' + escapeHtml(String(step)) + '</li>';
+    });
+    html += '</ol>';
+    if (view.status === 'awaiting_user') {
+      html += '<div class="orchestrate-plan-wait">等待你的补充</div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  html += '<div class="orchestrate-wb-section"><div class="orchestrate-wb-section-title">执行时间线</div>';
+  const timeline = buildWorkbenchTimeline(view);
+  if (!timeline.length) {
+    html += '<p class="orchestrate-workbench-empty" style="margin:8px 0">暂无调用记录</p>';
+  } else {
+    html += '<ul class="orchestrate-wb-timeline">';
+    timeline.forEach(function (item) {
+      const kind = (item && item.kind) || 'step';
+      const badge = kind === 'kb' ? '知识库' : (kind === 'external' ? '外源' : kind);
+      const name = (item && (item.name || item.id)) || kind;
+      const badgeHtml = '<span class="orchestrate-wb-badge ' + kindBadgeClass(kind) + '">' +
+        escapeHtml(String(badge)) + '</span>';
+      const nameHtml = '<span class="orchestrate-wb-name">' + escapeHtml(String(name)) + '</span>';
+      const excerpt = item && item.excerpt ? String(item.excerpt) : '';
+      if (excerpt) {
+        let resultHtml = '<div class="orchestrate-wb-result">' + escapeHtml(excerpt);
+        if (kind === 'external' && view.external_search && view.external_search.url) {
+          const u = String(view.external_search.url);
+          const label = String(view.external_search.label || '打开官网');
+          resultHtml += '<div class="orchestrate-wb-result-link"><a href="' +
+            escapeHtml(u) + '" target="_blank" rel="noopener noreferrer">' +
+            escapeHtml(label) + '</a></div>';
+        }
+        resultHtml += '</div>';
+        html += '<li class="has-result"><details><summary>' + badgeHtml + nameHtml +
+          '</summary>' + resultHtml + '</details></li>';
+      } else {
+        html += '<li>' + badgeHtml + nameHtml + '</li>';
+      }
+    });
+    html += '</ul>';
+  }
+  html += '</div>';
+
+  html += '<div class="orchestrate-wb-section orchestrate-wb-obs">';
+  const obs = view.observations || [];
+  if (!obs.length) {
+    html += '<div class="orchestrate-wb-section-title">观察摘要</div>';
+    html += '<p class="orchestrate-workbench-empty" style="margin:8px 0">暂无观察摘录</p>';
+  } else {
+    html += '<details><summary>观察摘要（' + obs.length + '）</summary><ul>';
+    obs.forEach(function (o) {
+      html += '<li><strong>' + escapeHtml(String(o.step || '')) + '</strong> — ' +
+        escapeHtml(String(o.excerpt || '')) + '</li>';
+    });
+    html += '</ul></details>';
+  }
+  html += '</div>';
+
+  body.innerHTML = html;
+}
+
+function clearOrchestrateWorkbenchState() {
+  if (window.BusyController && BusyController.isBusy()) BusyController.abort();
+  orchestrateTurnViews.clear();
+  selectedOrchestrateTurnId = null;
+  renderOrchestrateWorkbench();
+  closeOrchestrateWorkbenchDrawer();
+}
+
+function isOrchestrateWorkbenchOpen() {
+  const panel = elements.orchestrateWorkbench || document.getElementById('orchestrateWorkbench');
+  return !!(panel && panel.classList.contains('is-open'));
+}
+
+function syncOrchestrateTabPressed() {
+  const open = isOrchestrateWorkbenchOpen();
+  document.querySelectorAll('.orchestrate-turn-tab').forEach(function (tab) {
+    const turn = tab.closest('.orchestrate-turn');
+    const id = turn && turn.getAttribute('data-turn-id');
+    tab.setAttribute('aria-pressed', open && id === selectedOrchestrateTurnId ? 'true' : 'false');
+  });
+}
+
+function selectOrchestrateTurn(turnId, opts) {
+  opts = opts || {};
+  selectedOrchestrateTurnId = turnId || null;
+  if (elements.chatMessages) {
+    elements.chatMessages.querySelectorAll('.orchestrate-turn.is-selected-turn').forEach(function (el) {
+      el.classList.remove('is-selected-turn');
+    });
+    if (turnId) {
+      const node = elements.chatMessages.querySelector('.orchestrate-turn[data-turn-id="' + turnId + '"]');
+      if (node) node.classList.add('is-selected-turn');
+    }
+  }
+  renderOrchestrateWorkbench();
+  if (opts.openDrawer) openOrchestrateWorkbenchDrawer();
+  else syncOrchestrateTabPressed();
+}
+
+function openOrchestrateWorkbenchDrawer() {
+  const panel = elements.orchestrateWorkbench || document.getElementById('orchestrateWorkbench');
+  const backdrop = elements.orchestrateWorkbenchBackdrop || document.getElementById('orchestrateWorkbenchBackdrop');
+  const toggle = elements.orchestrateWorkbenchToggle || document.getElementById('orchestrateWorkbenchToggle');
+  if (panel) panel.classList.add('is-open');
+  if (backdrop) backdrop.hidden = false;
+  if (toggle) toggle.setAttribute('aria-expanded', 'true');
+  syncOrchestrateTabPressed();
+}
+
+function closeOrchestrateWorkbenchDrawer() {
+  const panel = elements.orchestrateWorkbench || document.getElementById('orchestrateWorkbench');
+  const backdrop = elements.orchestrateWorkbenchBackdrop || document.getElementById('orchestrateWorkbenchBackdrop');
+  const toggle = elements.orchestrateWorkbenchToggle || document.getElementById('orchestrateWorkbenchToggle');
+  if (panel) panel.classList.remove('is-open');
+  if (backdrop) backdrop.hidden = true;
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  syncOrchestrateTabPressed();
+}
+
+function toggleOrchestrateWorkbenchDrawer() {
+  const panel = elements.orchestrateWorkbench || document.getElementById('orchestrateWorkbench');
+  if (panel && panel.classList.contains('is-open')) closeOrchestrateWorkbenchDrawer();
+  else openOrchestrateWorkbenchDrawer();
+}
+
+function attachOrchestrateTurnTab(shell, turnId) {
+  if (!shell || !shell.content || !turnId) return;
+  let tab = shell.content.querySelector('.orchestrate-turn-tab, .orchestrate-turn-badge');
+  if (!tab) {
+    tab = document.createElement('button');
+    tab.type = 'button';
+    shell.content.appendChild(tab);
+  }
+  tab.className = 'orchestrate-turn-tab';
+  tab.textContent = '编排';
+  tab.setAttribute('aria-pressed', selectedOrchestrateTurnId === turnId && isOrchestrateWorkbenchOpen() ? 'true' : 'false');
+  tab.onclick = function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const panel = elements.orchestrateWorkbench || document.getElementById('orchestrateWorkbench');
+    const open = panel && panel.classList.contains('is-open');
+    if (open && selectedOrchestrateTurnId === turnId) {
+      closeOrchestrateWorkbenchDrawer();
+      tab.setAttribute('aria-pressed', 'false');
+      return;
+    }
+    selectOrchestrateTurn(turnId, { openDrawer: true });
+  };
+  // 保证在 cite-list 之后：再 append 一次移到末尾
+  shell.content.appendChild(tab);
+}
+
+function attachOrchestrateTurnBadge(shell, turnId) {
+  attachOrchestrateTurnTab(shell, turnId);
+}
+
+function registerOrchestrateTurn(shell, data) {
+  const turnId = (shell && shell.wrap && shell.wrap.getAttribute('data-turn-id')) || nextOrchestrateTurnId();
+  if (shell && shell.wrap) {
+    shell.wrap.setAttribute('data-turn-id', turnId);
+    shell.wrap.classList.add('orchestrate-turn');
+  }
+  const view = buildOrchestrateTurnView(turnId, data || {});
+  orchestrateTurnViews.set(turnId, view);
+  if (shell && shell.flowSlot) {
+    shell.flowSlot.hidden = true;
+    shell.flowSlot.innerHTML = '';
+  }
+  if (shell && shell.planSlot) {
+    shell.planSlot.hidden = true;
+    shell.planSlot.innerHTML = '';
+  }
+  // Tab 在引用渲染后再挂（applyOrchestrateSuccess）
+  selectOrchestrateTurn(turnId); // 无 openDrawer
+  return turnId;
+}
+
+function initOrchestrateWorkbenchUi() {
+  const closeBtn = elements.orchestrateWorkbenchClose || document.getElementById('orchestrateWorkbenchClose');
+  const backdrop = elements.orchestrateWorkbenchBackdrop || document.getElementById('orchestrateWorkbenchBackdrop');
+  // #orchestrateWorkbenchToggle 已移除；不再绑定浮动钮
+  if (closeBtn && !closeBtn._wbBound) {
+    closeBtn._wbBound = true;
+    closeBtn.addEventListener('click', closeOrchestrateWorkbenchDrawer);
+  }
+  if (backdrop && !backdrop._wbBound) {
+    backdrop._wbBound = true;
+    backdrop.addEventListener('click', closeOrchestrateWorkbenchDrawer);
+  }
+  if (!window._orchestrateWbEsc) {
+    window._orchestrateWbEsc = true;
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') closeOrchestrateWorkbenchDrawer();
+    });
+  }
+  renderOrchestrateWorkbench();
 }
 
 function collectOrchestrateCitations(data) {
-  if (!data || typeof data !== 'object') return [];
-  if (Array.isArray(data.citations) && data.citations.length) return data.citations;
-  const nested = data.data && typeof data.data === 'object' ? data.data : null;
-  if (nested) {
-    const fromNested = []
-      .concat(Array.isArray(nested.law_citations) ? nested.law_citations : [])
-      .concat(Array.isArray(nested.case_citations) ? nested.case_citations : []);
-    if (fromNested.length) return fromNested;
+  return normalizeCitationsList(data);
+}
+
+function normalizeCitationsList(dataOrList) {
+  if (Array.isArray(dataOrList)) {
+    return dataOrList.filter(function (c) { return c && typeof c === 'object'; });
   }
+  const data = dataOrList;
+  if (!data || typeof data !== 'object') return [];
+  if (Array.isArray(data.citations) && data.citations.length) {
+    return data.citations.filter(function (c) { return c && typeof c === 'object'; });
+  }
+  const nested = data.data && typeof data.data === 'object' ? data.data : null;
+  const fromNested = nested
+    ? []
+        .concat(Array.isArray(nested.law_citations) ? nested.law_citations : [])
+        .concat(Array.isArray(nested.case_citations) ? nested.case_citations : [])
+    : [];
   const top = []
     .concat(Array.isArray(data.law_citations) ? data.law_citations : [])
     .concat(Array.isArray(data.case_citations) ? data.case_citations : []);
-  return top;
+  return (fromNested.length ? fromNested : top).filter(function (c) {
+    return c && typeof c === 'object';
+  });
 }
 
-function renderOrchestrateCitations(container, citations) {
-  if (!container || !citations || !citations.length) return;
+function openCitationPreview(c) {
+  if (!c || typeof c !== 'object') return;
+  const fileId = c.file_id || '';
+  const title = (c.title || '文献').trim() || '文献';
+  const article = (c.article || '').trim();
+  if (!fileId) {
+    if (typeof updateStatus === 'function') {
+      updateStatus('未关联源文件，无法预览', 'error');
+    } else {
+      alert('未关联源文件，无法预览');
+    }
+    return;
+  }
+  try {
+    getChatFilePreview()
+      .open(fileId, title, { article: article })
+      .catch(function (err) {
+        console.warn('citation preview failed', err);
+        if (typeof updateStatus === 'function') {
+          updateStatus(err && err.message ? err.message : '预览失败', 'error');
+        }
+      });
+  } catch (err) {
+    console.warn('citation preview unavailable', err);
+  }
+}
+
+function findCitationLinkRanges(plainText, citations) {
+  const text = String(plainText || '');
+  const candidates = [];
+  (citations || []).forEach(function (c, idx) {
+    if (!c || typeof c !== 'object') return;
+    const title = String(c.title || '').trim();
+    const article = String(c.article || '').trim();
+    const docType = String(c.doc_type || '').trim();
+    const needles = [];
+    if (title && article) {
+      needles.push(title + article, title + ' ' + article);
+      needles.push('《' + title + '》' + article, '《' + title + '》 ' + article);
+    }
+    if (article) {
+      const sameArticle = (citations || []).filter(function (x) {
+        return x && String(x.article || '').trim() === article;
+      });
+      if (sameArticle.length === 1) needles.push(article);
+    }
+    if (title) {
+      needles.push('《' + title + '》');
+      if (docType === 'case' || !article) needles.push(title);
+    }
+    needles.forEach(function (n) {
+      if (!n || n.length < 2) return;
+      let from = 0;
+      while (from < text.length) {
+        const i = text.indexOf(n, from);
+        if (i < 0) break;
+        candidates.push({ start: i, end: i + n.length, idx: idx, len: n.length });
+        from = i + n.length;
+      }
+    });
+  });
+  candidates.sort(function (a, b) {
+    return b.len - a.len || a.start - b.start;
+  });
+  const taken = [];
+  candidates.forEach(function (cand) {
+    const overlap = taken.some(function (t) {
+      return !(cand.end <= t.start || cand.start >= t.end);
+    });
+    if (!overlap) taken.push(cand);
+  });
+  taken.sort(function (a, b) { return a.start - b.start; });
+  return taken;
+}
+
+function linkifyPlainTextWithCitations(plainText, citations) {
+  const text = String(plainText || '');
+  const list = citations || [];
+  if (!text) return '';
+  if (!list.length) {
+    return escapeHtml(text).replace(/\n/g, '<br>');
+  }
+  const ranges = findCitationLinkRanges(text, list);
+  let html = '';
+  let pos = 0;
+  ranges.forEach(function (r) {
+    if (r.start > pos) {
+      html += escapeHtml(text.slice(pos, r.start)).replace(/\n/g, '<br>');
+    }
+    const c = list[r.idx] || {};
+    const label = escapeHtml(text.slice(r.start, r.end));
+    const disabled = c.file_id ? '' : ' disabled';
+    const titleAttr = c.file_id ? '' : ' title="未关联源文件"';
+    html +=
+      '<button type="button" class="cite-inline"' +
+      disabled +
+      titleAttr +
+      ' data-cite-idx="' +
+      r.idx +
+      '">' +
+      label +
+      '</button>';
+    pos = r.end;
+  });
+  if (pos < text.length) {
+    html += escapeHtml(text.slice(pos)).replace(/\n/g, '<br>');
+  }
+  return html;
+}
+
+function bindInlineCitationClicks(root, citations) {
+  if (!root) return;
+  root.querySelectorAll('button.cite-inline').forEach(function (btn) {
+    btn.onclick = function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const idx = parseInt(btn.getAttribute('data-cite-idx'), 10);
+      openCitationPreview(citations[idx] || {});
+    };
+  });
+}
+
+function renderExternalSearchHint(host, hint) {
+  if (!host || !hint || !hint.needed) return;
+  const prev = host.querySelector('.external-search-hint');
+  if (prev) prev.remove();
+  const wrap = document.createElement('div');
+  wrap.className = 'external-search-hint';
+  const noteEl = document.createElement('div');
+  noteEl.className = 'external-search-hint-note';
+  noteEl.textContent = hint.note || '本地知识库未命中；未自动抓取外网正文，请打开官网核对。';
+  wrap.appendChild(noteEl);
+  if (hint.query) {
+    const queryEl = document.createElement('div');
+    queryEl.className = 'external-search-hint-query';
+    queryEl.textContent = '建议检索词：' + String(hint.query);
+    wrap.appendChild(queryEl);
+  }
+  const link = document.createElement('a');
+  link.href = hint.url || 'https://flk.npc.gov.cn/';
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.textContent = '打开国家法律法规数据库';
+  wrap.appendChild(link);
+  host.appendChild(wrap);
+}
+
+function renderCitationList(container, citations) {
+  if (!container) return;
   const prev = container.querySelector('.cite-list');
   if (prev) prev.remove();
-  const list = document.createElement('div');
-  list.className = 'cite-list';
+  const list = normalizeCitationsList(citations);
+  if (!list.length) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'cite-list';
   const label = document.createElement('div');
   label.className = 'cite-list-label';
   label.textContent = '引用';
-  list.appendChild(label);
+  wrap.appendChild(label);
   const seen = {};
-  citations.forEach(function (c) {
+  list.forEach(function (c, idx) {
     if (!c || typeof c !== 'object') return;
     const title = (c.title || '文献').trim() || '文献';
     const article = (c.article || '').trim();
@@ -4715,33 +5563,42 @@ function renderOrchestrateCitations(container, citations) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'cite-link';
-    btn.textContent = article ? (title + ' ' + article) : title;
+    btn.textContent = article ? title + ' ' + article : title;
     if (!fileId) {
       btn.disabled = true;
       btn.title = '未关联源文件';
     } else {
       btn.onclick = function () {
-        try {
-          getChatFilePreview()
-            .open(fileId, title, { article: article })
-            .catch(function (err) {
-              console.warn('citation preview failed', err);
-              if (typeof updateStatus === 'function') {
-                updateStatus(err && err.message ? err.message : '预览失败', 'error');
-              }
-            });
-        } catch (err) {
-          console.warn('citation preview unavailable', err);
-        }
+        openCitationPreview(c);
       };
     }
-    list.appendChild(btn);
+    btn.setAttribute('data-cite-idx', String(idx));
+    wrap.appendChild(btn);
   });
-  if (list.children.length <= 1) return;
-  container.appendChild(list);
-  if (elements.chatMessages) {
-    elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+  if (wrap.children.length <= 1) return;
+  container.appendChild(wrap);
+}
+
+/** @deprecated use renderCitationList / renderAssistantAnswerWithCitations */
+function renderOrchestrateCitations(container, citations) {
+  renderCitationList(container, citations);
+}
+
+function renderAssistantAnswerWithCitations(answerEl, plainText, citations, listHost) {
+  const list = normalizeCitationsList(citations);
+  const text = plainText || '';
+  if (answerEl) {
+    if (!text) {
+      answerEl.hidden = true;
+      answerEl.innerHTML = '';
+    } else {
+      answerEl.hidden = false;
+      answerEl.innerHTML = linkifyPlainTextWithCitations(text, list);
+      bindInlineCitationClicks(answerEl, list);
+    }
   }
+  const host = listHost || (answerEl && answerEl.parentElement) || null;
+  if (host) renderCitationList(host, list);
 }
 
 function paintOrchestrateFlow(slot, flow, visibleCount, runningIndex) {
@@ -4820,7 +5677,7 @@ function appendCapabilityTrace(host, caps) {
   if (bar) host.appendChild(bar);
 }
 
-function addMessage(role, content, type = 'normal', capabilities = null) {
+function addMessage(role, content, type = 'normal', capabilities = null, citations = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
   
@@ -4830,9 +5687,11 @@ function addMessage(role, content, type = 'normal', capabilities = null) {
   
   const contentDiv = document.createElement('div');
   contentDiv.className = `message-content ${type === 'error' ? 'error-message' : ''}`;
-  
-  // 如果内容包含HTML，使用innerHTML，否则使用textContent
-  if (type === 'html' || (typeof content === 'string' && content.includes('<'))) {
+
+  const citeList = normalizeCitationsList(citations);
+  if (role === 'assistant' && citeList.length && type !== 'html' && type !== 'error') {
+    renderAssistantAnswerWithCitations(contentDiv, content, citeList, contentDiv);
+  } else if (type === 'html' || (typeof content === 'string' && content.includes('<'))) {
     contentDiv.innerHTML = content;
   } else {
     contentDiv.textContent = content;
@@ -5798,7 +6657,7 @@ function parseJsonAndExtractConclusion(jsonString) {
 }
 
 // 添加完整的合并消息（非流式）
-function addCombinedMessage(thinkingContent, conclusionContent, capabilities) {
+function addCombinedMessage(thinkingContent, conclusionContent, capabilities, citations) {
   console.log('=== addCombinedMessage 被调用 ===');
   console.log('思考内容长度:', thinkingContent ? thinkingContent.length : 0);
   console.log('结论内容长度:', conclusionContent ? conclusionContent.length : 0);
@@ -5878,7 +6737,12 @@ function addCombinedMessage(thinkingContent, conclusionContent, capabilities) {
     
     const conclusionDiv = document.createElement('div');
     conclusionDiv.className = 'conclusion-content';
-    conclusionDiv.textContent = conclusionContent;
+    const citeList = normalizeCitationsList(citations);
+    if (citeList.length) {
+      renderAssistantAnswerWithCitations(conclusionDiv, conclusionContent, citeList, messageWrapper);
+    } else {
+      conclusionDiv.textContent = conclusionContent;
+    }
     messageWrapper.appendChild(conclusionDiv);
     console.log('✅ 结论内容已添加到消息');
   } else {
@@ -6294,6 +7158,7 @@ async function loadSessionList() {
             if (currentSession && currentSession.sessionId === session.sessionId) {
               await createNewSession();
               elements.chatMessages.innerHTML = '';
+              clearOrchestrateWorkbenchState();
             }
             
             // 刷新会话列表
@@ -7107,6 +7972,7 @@ async function deleteSession(sessionId) {
       console.log('删除的是当前会话，创建新会话');
       await createNewSession();
       elements.chatMessages.innerHTML = '';
+      clearOrchestrateWorkbenchState();
     }
     
     // 刷新会话列表
@@ -7131,20 +7997,21 @@ function restoreHistoryMessage(msg) {
   }
   if (msg.role === 'assistant') {
     const content = msg.content || '';
+    const citations = msg.citations || (msg.extra && msg.extra.citations) || null;
     const separator = '==JSON==';
     const separatorIndex = content.indexOf(separator);
     if (separatorIndex !== -1) {
       const thinkingContent = content.substring(0, separatorIndex).trim();
       const conclusionContent = content.substring(separatorIndex + separator.length).trim();
-      addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities);
+      addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities, citations);
     } else {
       const doubleLineBreakIndex = content.indexOf('\n\n');
       if (doubleLineBreakIndex !== -1 && doubleLineBreakIndex < content.length / 3 && !msg.artifact) {
         const thinkingContent = content.substring(0, doubleLineBreakIndex).trim();
         const conclusionContent = content.substring(doubleLineBreakIndex + 2).trim();
-        addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities);
+        addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities, citations);
       } else if (content) {
-        addMessage(msg.role, content, 'normal', msg.capabilities);
+        addMessage(msg.role, content, 'normal', msg.capabilities, citations);
       }
     }
     if (msg.artifact && msg.artifact.file_id) {
@@ -7211,6 +8078,7 @@ async function loadSession(sessionId) {
     };
     
   elements.chatMessages.innerHTML = '';
+  clearOrchestrateWorkbenchState();
   console.log('恢复对话历史，消息数量:', currentSession.conversationHistory.length);
   currentSession.conversationHistory.forEach(restoreHistoryMessage);
   await restoreGeneratedFilesForSession(currentSession.sessionId, currentSession.conversationHistory);
@@ -7223,6 +8091,7 @@ async function loadSession(sessionId) {
     if (typeof sessionId === 'object') {
       currentSession = sessionId;
       elements.chatMessages.innerHTML = '';
+      clearOrchestrateWorkbenchState();
       // 使用相同的逻辑恢复对话历史
       currentSession.conversationHistory.forEach(restoreHistoryMessage);
       restoreGeneratedFilesForSession(currentSession.sessionId, currentSession.conversationHistory).catch(() => {});
@@ -7678,6 +8547,7 @@ function bindEvents() {
   elements.newSessionBtn.onclick = async () => {
     await createNewSession();
     elements.chatMessages.innerHTML = '';
+    clearOrchestrateWorkbenchState();
     await loadSessionList();
   };
   
@@ -7695,6 +8565,7 @@ function bindEvents() {
           localStorage.removeItem('mcp_init_message_shown'); // 重置初始化消息标记
           await createNewSession();
           elements.chatMessages.innerHTML = '';
+          clearOrchestrateWorkbenchState();
           await loadSessionList();
         } else {
           throw new Error('删除会话失败');
@@ -7706,6 +8577,7 @@ function bindEvents() {
         localStorage.removeItem('mcp_init_message_shown');
         await createNewSession();
       elements.chatMessages.innerHTML = '';
+        clearOrchestrateWorkbenchState();
         await loadSessionList();
     }
   };

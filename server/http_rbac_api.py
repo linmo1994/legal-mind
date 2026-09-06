@@ -703,9 +703,13 @@ class RbacHttpApi:
         user = gated[1]["user"]
         raw_case = body.get("case_id")
         case_id: Optional[int] = None
-        if raw_case is not None and raw_case != "":
+        case_scope = "none"
+        if raw_case == "*":
+            case_scope = "all_permitted"
+        elif raw_case is not None and raw_case != "":
             try:
                 case_id = int(raw_case)
+                case_scope = "single"
             except (TypeError, ValueError):
                 return _deny(400, "case_id 无效")
             if not self.store.get_case(case_id):
@@ -722,4 +726,6 @@ class RbacHttpApi:
             user["id"], "cap.doc_write", case_id
         ):
             return _deny(403, "无权限：cap.doc_write")
-        return _ok({"user": user, "case_id": case_id})
+        out = {"user": user, "case_id": ("*" if case_scope == "all_permitted" else case_id)}
+        out["case_scope"] = case_scope
+        return _ok(out)

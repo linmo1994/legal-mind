@@ -10,6 +10,7 @@ from case_materials import (
     generate_evidence_brief,
     get_case_evidence_text,
     parse_evidence_tool_call,
+    resolve_cases_for_file_id,
     truncate_chars,
     EVIDENCE_BRIEF_MAX,
 )
@@ -84,6 +85,19 @@ class TestCaseMaterials(unittest.TestCase):
         self.assertEqual(args[0][0], "e1")
         self.assertIn("evidence_brief", args[0][1])
         self.assertLessEqual(len(args[0][1]["evidence_brief"]), EVIDENCE_BRIEF_MAX)
+
+    def test_resolve_cases_matches_evidence_only_not_contract(self):
+        store = MagicMock()
+
+        def get_case(cid):
+            cases = {
+                1: {"id": 1, "meta": {"evidence_file_ids": ["e1"], "contract_file_ids": []}},
+                2: {"id": 2, "meta": {"evidence_file_ids": [], "contract_file_ids": ["e1"]}},
+            }
+            return cases.get(int(cid))
+
+        store.get_case.side_effect = get_case
+        self.assertEqual(resolve_cases_for_file_id("e1", [1, 2], store), [1])
 
     def test_allow_case_material_access_deny_skips_build(self):
         """Unauthorized case_id must not reach build_case_material_context."""
