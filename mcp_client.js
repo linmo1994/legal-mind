@@ -4957,16 +4957,40 @@ function renderBusyStages(containerEl, stages) {
     const row = document.createElement('div');
     const st = (s && s.status) || 'todo';
     row.className = 'busy-stage is-' + st;
-    const dot = document.createElement('span');
-    dot.className = 'busy-stage-dot';
+    if (st === 'current') {
+      const spinner = document.createElement('span');
+      spinner.className = 'busy-stage-spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      row.appendChild(spinner);
+    } else {
+      const dot = document.createElement('span');
+      dot.className = 'busy-stage-dot';
+      row.appendChild(dot);
+    }
     const label = document.createElement('span');
     label.className = 'busy-stage-label';
     label.textContent = (s && s.label) || '';
-    row.appendChild(dot);
     row.appendChild(label);
     root.appendChild(row);
   });
   return root;
+}
+
+function setStatusBusySpinner(on) {
+  const textEl = elements && elements.statusText;
+  if (!textEl || !textEl.parentNode) return;
+  const bar = textEl.parentNode;
+  let sp = bar.querySelector(':scope > .status-busy-spinner');
+  if (on) {
+    if (!sp) {
+      sp = document.createElement('span');
+      sp.className = 'status-busy-spinner';
+      sp.setAttribute('aria-hidden', 'true');
+      bar.insertBefore(sp, textEl);
+    }
+  } else if (sp) {
+    sp.remove();
+  }
 }
 
 function removeBusyStages(containerEl) {
@@ -5005,6 +5029,7 @@ const BusyController = (function () {
     setInputDisabled(true);
     if (typeof setStopButtonState === 'function') setStopButtonState(true);
     if (typeof updateStatus === 'function') updateStatus('正在处理…', 'connecting');
+    setStatusBusySpinner(true);
     if (mountEl) renderBusyStages(mountEl, buildPlaceholderBusyStages());
     if (elements && elements.sendBtn) {
       elements.sendBtn.onclick = function () {
@@ -5032,6 +5057,7 @@ const BusyController = (function () {
     isProcessingInput = false;
     setInputDisabled(false);
     if (typeof setStopButtonState === 'function') setStopButtonState(false);
+    setStatusBusySpinner(false);
     if (typeof updateStatus === 'function') {
       updateStatus(reason === 'abort' ? '已停止生成' : (reason === 'error' ? '请求失败' : '就绪'), 'connected');
     }

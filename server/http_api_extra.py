@@ -53,7 +53,11 @@ def format_kb_hits(hits: list, *, limit: int = 5) -> str:
 
 
 def prefer_hits_matching_articles(hits: list, query: str = "") -> list:
-    """Reorder hits so chunks containing the queried article come first."""
+    """Keep only chunks that contain the queried article when one is specified.
+
+    Soft reorder is not enough: returning same-law neighbors (65/66/21) looks like a miss.
+    If the query names an article but no hit contains it, return [].
+    """
     try:
         from kb_query_parse import doc_has_article, extract_articles
     except Exception:
@@ -64,17 +68,13 @@ def prefer_hits_matching_articles(hits: list, query: str = "") -> list:
         return list(hits or [])
 
     matched: List[Any] = []
-    rest: List[Any] = []
     for hit in hits:
         if not isinstance(hit, dict):
-            rest.append(hit)
             continue
         doc = hit.get("document") or hit.get("text") or ""
         if any(doc_has_article(doc, a) for a in articles):
             matched.append(hit)
-        else:
-            rest.append(hit)
-    return matched + rest
+    return matched
 
 
 def hits_to_citations(hits: list, query: str = "") -> list:
@@ -163,7 +163,9 @@ def make_kb_retrieve_fn(mcp_server):
         except Exception as exc:
             print(f"[kb_retrieve] {doc_type} search failed: {exc}")
             return []
-        hits = prefer_hits_matching_articles(hits or [], q)
+        hits = prefer_hits_matching_articles(hits or [], q) if doc_type == "law" else list(
+            hits or []
+        )
         return hits[:5]
 
     def retrieve(query: str, scopes=None) -> Dict[str, Any]:

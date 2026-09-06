@@ -194,11 +194,10 @@ class VectorService:
                         for a in arts
                     )
                 ]
+                # Hard filter: never pad with other articles of the same statute.
                 if with_art:
-                    rest = [h for h in matched if h not in with_art]
-                    return sorted(with_art, key=rrf, reverse=True) + sorted(
-                        rest, key=rrf, reverse=True
-                    )
+                    return sorted(with_art, key=rrf, reverse=True)
+                return []
             return sorted(matched, key=rrf, reverse=True)
 
         # Fallback: soft boost only (avoid empty results on bad metadata)

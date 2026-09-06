@@ -81,6 +81,30 @@ class TestKbQueryParse(unittest.TestCase):
             "第六十四条",
         )
 
+    def test_extract_articles_informal_without_di(self):
+        """口语：缺「第」或「条」时仍应识别目标条文。"""
+        for q in (
+            "劳动合同法64条",
+            "检索劳动合同法六十四条",
+            "帮我查劳动合同法第64",
+            "劳动法 64条",
+        ):
+            arts = extract_articles(q)
+            self.assertTrue(arts, msg=f"expected articles for {q!r}")
+            forms = set()
+            for a in arts:
+                forms.update(normalize_article_forms(a))
+            self.assertTrue(
+                any("64" in f or "六十四" in f for f in forms),
+                msg=f"expected art 64 forms for {q!r}, got {arts} → {forms}",
+            )
+
+    def test_build_fts_match_informal_64_is_article_focused(self):
+        m = build_fts_match("劳动合同法64条")
+        self.assertNotIn('"劳动合同法" OR "64"', m)
+        self.assertTrue("第六十四条" in m or "第64条" in m)
+        self.assertNotIn(" OR \"64\"", m)
+
 
 if __name__ == "__main__":
     unittest.main()

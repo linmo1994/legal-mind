@@ -67,8 +67,8 @@ BusyController
 
 1. 输入框 `disabled`（或等效只读）  
 2. 发送钮 → `setStopButtonState(true)`，点击调用 `BusyController.abort`  
-3. 状态栏：`正在处理…`（可随当前阶段微调文案）  
-4. 气泡内挂载/更新阶段 UI（见 §4）  
+3. 状态栏：`正在处理…`（可随当前阶段微调文案）；busy 期间文案前显示转圈 spinner，结束移除  
+4. 气泡内挂载/更新阶段 UI（见 §4）；**当前阶段**左侧为转圈，done/todo 仍为圆点  
 5. `isProcessingInput` / `isGenerating` 与现有防重入标志对齐，busy 中忽略重复发送与回车
 
 **挂载点：**

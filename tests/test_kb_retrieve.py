@@ -91,6 +91,39 @@ class TestKbRetrieve(unittest.TestCase):
         ordered = prefer_hits_matching_articles(hits, "检索劳动合同法第六十四条")
         self.assertEqual(ordered[0]["id"], "b")
 
+    def test_prefer_hits_hard_filters_non_matching_articles(self):
+        """有明确条文时，禁止用同法其它条凑结果。"""
+        hits = [
+            {
+                "id": "a65",
+                "document": "第六十五条 ……",
+                "metadata": {"title": "劳动合同法"},
+            },
+            {
+                "id": "a66",
+                "document": "第六十六条 ……",
+                "metadata": {"title": "劳动合同法"},
+            },
+            {
+                "id": "a21",
+                "document": "第二十一条 ……",
+                "metadata": {"title": "劳动合同法"},
+            },
+        ]
+        for q in ("劳动合同法64条", "检索劳动合同法第六十四条"):
+            out = prefer_hits_matching_articles(hits, q)
+            self.assertEqual(out, [], msg=f"expected empty for {q!r}, got {[h['id'] for h in out]}")
+
+        hits_ok = hits + [
+            {
+                "id": "a64",
+                "document": "第六十四条 非全日制用工……",
+                "metadata": {"title": "劳动合同法"},
+            }
+        ]
+        out = prefer_hits_matching_articles(hits_ok, "劳动合同法64条")
+        self.assertEqual([h["id"] for h in out], ["a64"])
+
     def test_hits_to_citations_dedupes_same_file_article(self):
         hits = [
             {

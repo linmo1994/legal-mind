@@ -8,6 +8,17 @@ from typing import List, Optional
 from kb_fts import normalize_fts_query
 
 _ARTICLE_RE = re.compile(r"第[一二三四五六七八九十百千零〇\d]+条")
+# 口语缺「第」：64条 / 六十四条（不与已匹配的「第…条」重叠）
+_ARTICLE_BARE_AR_RE = re.compile(r"(?<![第\d])(\d{1,4})条")
+_ARTICLE_BARE_CN_RE = re.compile(
+    r"(?<![第零〇一二三四五六七八九十百千])([一二三四五六七八九十百千零〇]{1,12})条"
+)
+# 口语缺「条」：第64 / 第六十四（后不得再跟数字/中文数码，也不得跟 条/章/节…）
+_ARTICLE_NO_TIAO_RE = re.compile(
+    r"第(\d{1,4}|[一二三四五六七八九十百千零〇]{1,12})"
+    r"(?![零〇一二三四五六七八九十百千\d])"
+    r"(?![条章节款项编])"
+)
 
 _SEARCH_VERB_TOKENS = (
     "找一下",
@@ -43,15 +54,55 @@ _CN_DIGITS = {
 
 
 def extract_articles(query: str) -> List[str]:
-    """Return article strings found in query, e.g. ['第六十四条'] or ['第64条']."""
+    """Return canonical article labels, e.g. ['第64条'] (covers 64条 / 六十四条 / 第64)."""
     text = query or ""
-    seen = set()
+    nums: List[int] = []
+    seen_n = set()
+
+    def _add_num(n: Optional[int]) -> None:
+        if n is None or n <= 0 or n in seen_n:
+            return
+        # Guardrail: statute articles in practice are rarely > 9999
+        if n > 9999:
+            return
+        seen_n.add(n)
+        nums.append(n)
+
+    for m in _ARTICLE_RE.finditer(text):
+        inner = m.group(0)[1:-1]
+        if inner.isdigit():
+            _add_num(int(inner))
+        else:
+            _add_num(_cn_to_int(inner))
+
+    for m in _ARTICLE_BARE_AR_RE.finditer(text):
+        _add_num(int(m.group(1)))
+
+    for m in _ARTICLE_BARE_CN_RE.finditer(text):
+        _add_num(_cn_to_int(m.group(1)))
+
+    for m in _ARTICLE_NO_TIAO_RE.finditer(text):
+        inner = m.group(1)
+        if inner.isdigit():
+            _add_num(int(inner))
+        else:
+            _add_num(_cn_to_int(inner))
+
     out: List[str] = []
-    for m in _ARTICLE_RE.findall(text):
-        if m not in seen:
-            seen.add(m)
-            out.append(m)
+    for n in nums:
+        # Prefer Arabic canonical; normalize_article_forms expands Chinese twin.
+        out.append(f"第{n}条")
     return out
+
+
+def _strip_article_spans(text: str) -> str:
+    """Remove article-like spans so they do not pollute law-name hints / FTS tokens."""
+    t = text or ""
+    t = _ARTICLE_RE.sub(" ", t)
+    t = _ARTICLE_BARE_AR_RE.sub(" ", t)
+    t = _ARTICLE_BARE_CN_RE.sub(" ", t)
+    t = _ARTICLE_NO_TIAO_RE.sub(" ", t)
+    return re.sub(r"\s+", " ", t).strip()
 
 
 def _cn_to_int(s: str) -> Optional[int]:
@@ -178,11 +229,12 @@ def resolve_hit_article(doc: str, query: str = "") -> Optional[str]:
     """Pick citation article from hit text; never stamp query article onto unrelated chunks.
 
     Prefer a query article only when a normalized form appears in the document;
-    otherwise use the first article found in the document; otherwise None.
+    otherwise use the first surface 「第…条」 found in the document; otherwise None.
     """
     text = (doc or "").strip()
     query_articles = extract_articles(query or "")
-    doc_articles = extract_articles(text) if text else []
+    # Prefer labels as written in the chunk (第六十四条), not canonical 第64条.
+    doc_surface = list(dict.fromkeys(_ARTICLE_RE.findall(text))) if text else []
 
     for qa in query_articles:
         qa_forms = set(normalize_article_forms(qa))
@@ -190,13 +242,13 @@ def resolve_hit_article(doc: str, query: str = "") -> Optional[str]:
             continue
         if not any(f in text for f in qa_forms):
             continue
-        for da in doc_articles:
+        for da in doc_surface:
             if set(normalize_article_forms(da)) & qa_forms:
                 return da
         return qa
 
-    if doc_articles:
-        return doc_articles[0]
+    if doc_surface:
+        return doc_surface[0]
     return None
 
 
@@ -212,8 +264,7 @@ def extract_law_name_hint(query: str) -> Optional[str]:
             break
         text = nxt
     # Drop article spans so they don't pollute the law name
-    text_wo = _ARTICLE_RE.sub(" ", text)
-    text_wo = re.sub(r"\s+", " ", text_wo).strip()
+    text_wo = _strip_article_spans(text)
     if not text_wo:
         return None
     # Prefer continuous CJK run that ends with a law-like suffix
