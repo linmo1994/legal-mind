@@ -570,12 +570,13 @@ async function init() {
   }
 }
 
-// 创建新会话（使用服务端API）
-async function createNewSession() {
+// 创建新会话：默认只建本地草稿，等首条有效消息再写入服务端，避免空会话进列表
+async function createNewSession(options) {
+  const opts = options || {};
+  const persist = !!opts.persist;
   const sessionId = `sess_${Date.now()}`;
   
-  // 先创建本地会话对象，确保即使服务端失败也有会话可用
-  const fallbackSession = {
+  const localSession = {
     sessionId: sessionId,
     status: 'active',
     currentIntent: null,
@@ -585,8 +586,17 @@ async function createNewSession() {
     contextCache: {},
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    conversationHistory: []
+    conversationHistory: [],
+    title: '',
+    lastUserInput: '',
+    _serverPersisted: false
   };
+
+  if (!persist || !CONFIG || !CONFIG.mcpServerUrl) {
+    currentSession = localSession;
+    updateStatus('就绪', 'connected');
+    return currentSession;
+  }
   
   try {
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions`, {
@@ -601,44 +611,68 @@ async function createNewSession() {
     });
     
     if (!response.ok) {
-      // ⚠️ 不抛出异常，直接降级到本地存储
       console.warn(`服务端创建会话失败 (HTTP ${response.status})，使用本地会话`);
-      currentSession = fallbackSession;
+      currentSession = localSession;
       updateStatus('就绪', 'connected');
       return currentSession;
     }
     
     try {
-    const session = await response.json();
-  currentSession = {
-      sessionId: session.session_id,
-      status: session.status || 'active',
-      currentIntent: session.current_intent || null,
-      collectedParameters: session.collected_parameters || {},
-      missingParameters: session.missing_parameters || [],
-      stage: session.stage || 'idle',
-      contextCache: session.context_cache || {},
-      createdAt: session.created_at,
-      updatedAt: session.updated_at,
-      conversationHistory: session.conversation_history || [],
-      title: session.title || '',
-      lastUserInput: session.last_user_input || ''
-    };
-    updateStatus('就绪', 'connected');
-    return currentSession;
+      const session = await response.json();
+      currentSession = {
+        sessionId: session.session_id,
+        status: session.status || 'active',
+        currentIntent: session.current_intent || null,
+        collectedParameters: session.collected_parameters || {},
+        missingParameters: session.missing_parameters || [],
+        stage: session.stage || 'idle',
+        contextCache: session.context_cache || {},
+        createdAt: session.created_at,
+        updatedAt: session.updated_at,
+        conversationHistory: session.conversation_history || [],
+        title: session.title || '',
+        lastUserInput: session.last_user_input || '',
+        _serverPersisted: true
+      };
+      updateStatus('就绪', 'connected');
+      return currentSession;
     } catch (parseError) {
-      // JSON解析失败，使用降级方案
       console.warn('解析服务端响应失败，使用本地会话:', parseError);
-      currentSession = fallbackSession;
+      currentSession = localSession;
       updateStatus('就绪', 'connected');
       return currentSession;
     }
   } catch (error) {
-    // 网络错误或其他异常，使用降级方案
     console.error('创建会话失败，使用本地会话:', error);
-    currentSession = fallbackSession;
-  updateStatus('就绪', 'connected');
+    currentSession = localSession;
+    updateStatus('就绪', 'connected');
     return currentSession;
+  }
+}
+
+/** Ensure current session row exists on the server before saving messages. */
+async function ensureSessionPersistedOnServer() {
+  if (!currentSession || !currentSession.sessionId) return false;
+  if (currentSession._serverPersisted) return true;
+  if (!CONFIG || !CONFIG.mcpServerUrl) return false;
+  try {
+    const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: currentSession.sessionId,
+        title: currentSession.title || ''
+      })
+    });
+    if (!response.ok) {
+      console.warn('ensureSessionPersistedOnServer failed:', response.status);
+      return false;
+    }
+    currentSession._serverPersisted = true;
+    return true;
+  } catch (err) {
+    console.warn('ensureSessionPersistedOnServer error:', err);
+    return false;
   }
 }
 
@@ -4375,6 +4409,9 @@ function tryHandleOrchestrate(fullUserMessage) {
         attachOrchestrateTurnTab(targetShell, targetShell.wrap.getAttribute('data-turn-id'));
         appendRelatedMaterialsTab(targetShell.wrap, collectOrchestrateCitations(data));
         appendAssistantMessageActions(targetShell.wrap);
+        if (data.assistant_message_id != null) {
+          setAssistantMessageId(targetShell.wrap, data.assistant_message_id);
+        }
       }
       const citations = collectOrchestrateCitations(data);
       if (data.artifact && data.artifact.file_id) {
@@ -4385,6 +4422,7 @@ function tryHandleOrchestrate(fullUserMessage) {
         currentSession.conversationHistory.push({
           role: 'assistant',
           content: data.visible_text,
+          id: data.assistant_message_id,
           artifact: data.artifact || undefined,
           capabilities: data.capabilities || undefined,
           citations: citations.length ? citations : undefined,
@@ -4401,7 +4439,13 @@ function tryHandleOrchestrate(fullUserMessage) {
           if (data.plan) extra.plan = data.plan;
           if (data.past_steps) extra.past_steps = data.past_steps;
           if (data.status) extra.status = data.status;
-          addMessageToServer(currentSession.sessionId, 'assistant', data.visible_text, Object.keys(extra).length ? extra : null).catch(() => {});
+          addMessageToServer(currentSession.sessionId, 'assistant', data.visible_text, Object.keys(extra).length ? extra : null)
+            .then(function (mid) {
+              if (mid != null && targetShell && targetShell.wrap) {
+                setAssistantMessageId(targetShell.wrap, mid);
+              }
+            })
+            .catch(() => {});
         }
         if (typeof saveSession === 'function') {
           saveSession(currentSession).catch(() => {});
@@ -4418,6 +4462,7 @@ function tryHandleOrchestrate(fullUserMessage) {
           ? LegalMindAuth.authHeaders()
           : { 'Content-Type': 'application/json' }
       );
+      if (!headers['Content-Type']) headers['Content-Type'] = 'application/json';
       headers['Accept'] = 'text/event-stream';
       return fetch(`${CONFIG.mcpServerUrl}/api/orchestrate`, {
         method: 'POST',
@@ -4603,6 +4648,7 @@ function tryHandleOrchestrate(fullUserMessage) {
     }
 
     try {
+      await ensureSessionPersistedOnServer();
       shell = addOrchestrateProgressShell();
       ensureOrchestrateTurnId(shell);
       const controller = BusyController.start({ mode: 'orchestrate', mountEl: shell.content });
@@ -5942,39 +5988,174 @@ function findCitationLinkRanges(plainText, citations) {
   return taken;
 }
 
+/**
+ * Safe Markdown → HTML for assistant answers.
+ * Escapes first, then applies a small subset: headings, lists, hr, bold/italic/code, paragraphs.
+ */
+function formatAssistantMarkdown(plainText) {
+  let text = String(plainText || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (!text) return '';
+
+  // Protect fenced code blocks before escaping line-oriented rules
+  const fences = [];
+  text = text.replace(/```([\s\S]*?)```/g, function (_, code) {
+    const token = '§§FENCE' + fences.length + '§§';
+    fences.push(
+      '<pre class="md-pre"><code>' +
+        escapeHtml(code.replace(/^\n/, '').replace(/\n$/, '')) +
+        '</code></pre>'
+    );
+    return token;
+  });
+
+  const lines = text.split('\n');
+  const blocks = [];
+  let i = 0;
+  let paraBuf = [];
+
+  function flushParagraph() {
+    if (!paraBuf.length) return;
+    const joined = paraBuf.join('\n');
+    blocks.push(
+      '<p>' + formatInlineMarkdown(escapeHtml(joined)).replace(/\n/g, '<br>') + '</p>'
+    );
+    paraBuf = [];
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const fenceMatch = line.match(/^§§FENCE(\d+)§§$/);
+    if (fenceMatch) {
+      flushParagraph();
+      blocks.push(fences[Number(fenceMatch[1])] || '');
+      i += 1;
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s*(.+)$/);
+    if (heading) {
+      flushParagraph();
+      const level = Math.min(heading[1].length, 4);
+      blocks.push(
+        '<h' +
+          level +
+          ' class="md-h">' +
+          formatInlineMarkdown(escapeHtml(heading[2].trim())) +
+          '</h' +
+          level +
+          '>'
+      );
+      i += 1;
+      continue;
+    }
+
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flushParagraph();
+      blocks.push('<hr class="md-hr">');
+      i += 1;
+      continue;
+    }
+
+    const ul = line.match(/^\s*[-*+]\s+(.+)$/);
+    if (ul) {
+      flushParagraph();
+      const items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(/^\s*[-*+]\s+(.+)$/);
+        if (!m) break;
+        items.push('<li>' + formatInlineMarkdown(escapeHtml(m[1])) + '</li>');
+        i += 1;
+      }
+      blocks.push('<ul class="md-list">' + items.join('') + '</ul>');
+      continue;
+    }
+
+    const ol = line.match(/^\s*\d+[.)]\s+(.+)$/);
+    if (ol) {
+      flushParagraph();
+      const items = [];
+      while (i < lines.length) {
+        const m = lines[i].match(/^\s*\d+[.)]\s+(.+)$/);
+        if (!m) break;
+        items.push('<li>' + formatInlineMarkdown(escapeHtml(m[1])) + '</li>');
+        i += 1;
+      }
+      blocks.push('<ol class="md-list">' + items.join('') + '</ol>');
+      continue;
+    }
+
+    if (!line.trim()) {
+      flushParagraph();
+      i += 1;
+      continue;
+    }
+
+    paraBuf.push(line);
+    i += 1;
+  }
+  flushParagraph();
+
+  return blocks.join('');
+}
+
+function formatInlineMarkdown(escapedHtml) {
+  let s = escapedHtml || '';
+  s = s.replace(/`([^`]+)`/g, '<code class="md-code">$1</code>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  return s;
+}
+
 function linkifyPlainTextWithCitations(plainText, citations) {
   const text = String(plainText || '');
   const list = citations || [];
   if (!text) return '';
-  if (!list.length) {
-    return escapeHtml(text).replace(/\n/g, '<br>');
-  }
-  const ranges = findCitationLinkRanges(text, list);
-  let html = '';
+
+  const ranges = list.length ? findCitationLinkRanges(text, list) : [];
+  const citeParts = [];
+  let joined = '';
   let pos = 0;
+  const PH = '§§CITE';
+
   ranges.forEach(function (r) {
-    if (r.start > pos) {
-      html += escapeHtml(text.slice(pos, r.start)).replace(/\n/g, '<br>');
-    }
-    const c = list[r.idx] || {};
-    const label = escapeHtml(text.slice(r.start, r.end));
+    if (r.start > pos) joined += text.slice(pos, r.start);
+    joined += PH + citeParts.length + '§§';
+    citeParts.push({
+      idx: r.idx,
+      label: text.slice(r.start, r.end),
+      cite: list[r.idx] || {}
+    });
+    pos = r.end;
+  });
+  if (pos < text.length) joined += text.slice(pos);
+  if (!joined && !ranges.length) joined = text;
+
+  let html = formatAssistantMarkdown(joined);
+  if (!html && joined) {
+    html = escapeHtml(joined).replace(/\n/g, '<br>');
+  }
+
+  citeParts.forEach(function (part, i) {
+    const c = part.cite || {};
+    const label = escapeHtml(part.label);
     const disabled = c.file_id ? '' : ' disabled';
     const titleAttr = c.file_id ? '' : ' title="未关联源文件"';
-    html +=
+    const btn =
       '<button type="button" class="cite-inline"' +
       disabled +
       titleAttr +
       ' data-cite-idx="' +
-      r.idx +
+      part.idx +
       '">' +
       label +
       '</button>';
-    pos = r.end;
+    const token = PH + i + '§§';
+    html = html.split(token).join(btn);
+    html = html.split(escapeHtml(token)).join(btn);
   });
-  if (pos < text.length) {
-    html += escapeHtml(text.slice(pos)).replace(/\n/g, '<br>');
-  }
-  return html;
+
+  return '<div class="md-body">' + html + '</div>';
 }
 
 function bindInlineCitationClicks(root, citations) {
@@ -6101,8 +6282,9 @@ function getAssistantMessagePlainText(messageEl) {
   return (clone.innerText || clone.textContent || '').trim();
 }
 
-function appendAssistantMessageActions(messageEl) {
+function appendAssistantMessageActions(messageEl, opts) {
   if (!messageEl || messageEl.querySelector('.assistant-msg-actions')) return null;
+  opts = opts || {};
   // Skip pure loading / tool-invocation chrome without answer body
   if (
     messageEl.classList.contains('loading-message') ||
@@ -6146,25 +6328,35 @@ function appendAssistantMessageActions(messageEl) {
   bar.appendChild(dislikeBtn);
   bar.appendChild(copyBtn);
 
+  function applyFeedbackUi(feedback) {
+    const liked = feedback === 'like';
+    const disliked = feedback === 'dislike';
+    likeBtn.classList.toggle('is-active', liked);
+    likeBtn.setAttribute('aria-pressed', liked ? 'true' : 'false');
+    dislikeBtn.classList.toggle('is-active', disliked);
+    dislikeBtn.setAttribute('aria-pressed', disliked ? 'true' : 'false');
+  }
+
+  if (opts.messageId != null && opts.messageId !== '') {
+    setAssistantMessageId(messageEl, opts.messageId);
+  }
+  if (opts.feedback === 'like' || opts.feedback === 'dislike') {
+    applyFeedbackUi(opts.feedback);
+  }
+
   likeBtn.addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
-    const on = likeBtn.classList.toggle('is-active');
-    likeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    if (on) {
-      dislikeBtn.classList.remove('is-active');
-      dislikeBtn.setAttribute('aria-pressed', 'false');
-    }
+    const on = !likeBtn.classList.contains('is-active');
+    applyFeedbackUi(on ? 'like' : null);
+    persistAssistantFeedback(messageEl, on ? 'like' : null);
   });
   dislikeBtn.addEventListener('click', function (e) {
     e.preventDefault();
     e.stopPropagation();
-    const on = dislikeBtn.classList.toggle('is-active');
-    dislikeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    if (on) {
-      likeBtn.classList.remove('is-active');
-      likeBtn.setAttribute('aria-pressed', 'false');
-    }
+    const on = !dislikeBtn.classList.contains('is-active');
+    applyFeedbackUi(on ? 'dislike' : null);
+    persistAssistantFeedback(messageEl, on ? 'dislike' : null);
   });
   copyBtn.addEventListener('click', function (e) {
     e.preventDefault();
@@ -6191,6 +6383,64 @@ function appendAssistantMessageActions(messageEl) {
 
   host.appendChild(bar);
   return bar;
+}
+
+function setAssistantMessageId(messageEl, messageId) {
+  if (!messageEl || messageId == null || messageId === '') return;
+  messageEl.setAttribute('data-message-id', String(messageId));
+  const pending = messageEl.getAttribute('data-pending-feedback');
+  if (pending === 'like' || pending === 'dislike' || pending === 'none') {
+    messageEl.removeAttribute('data-pending-feedback');
+    persistAssistantFeedback(messageEl, pending === 'none' ? null : pending, true);
+  }
+}
+
+async function persistAssistantFeedback(messageEl, feedback, fromPending) {
+  if (!messageEl) return;
+  const sid = currentSession && currentSession.sessionId;
+  const mid = messageEl.getAttribute('data-message-id');
+  if (!sid || !mid) {
+    if (!fromPending) {
+      messageEl.setAttribute(
+        'data-pending-feedback',
+        feedback == null ? 'none' : String(feedback)
+      );
+    }
+    return;
+  }
+  if (!CONFIG || !CONFIG.mcpServerUrl) return;
+  try {
+    const headers = Object.assign(
+      {},
+      (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
+        ? LegalMindAuth.authHeaders()
+        : {},
+      { 'Content-Type': 'application/json' }
+    );
+    const resp = await fetch(
+      `${CONFIG.mcpServerUrl}/api/sessions/${encodeURIComponent(sid)}/messages/${encodeURIComponent(mid)}`,
+      {
+        method: 'PATCH',
+        headers: headers,
+        body: JSON.stringify({ feedback: feedback || null })
+      }
+    );
+    if (!resp.ok) {
+      console.warn('保存点赞反馈失败:', resp.status);
+      return;
+    }
+    if (currentSession && Array.isArray(currentSession.conversationHistory)) {
+      const idNum = Number(mid);
+      currentSession.conversationHistory.forEach(function (m) {
+        if (m && (m.id === idNum || String(m.id) === String(mid)) && m.role === 'assistant') {
+          if (feedback) m.feedback = feedback;
+          else delete m.feedback;
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('保存点赞反馈异常:', err);
+  }
 }
 
 function fallbackCopyText(text) {
@@ -6234,7 +6484,8 @@ function showPageToast(message, durationMs) {
   }, ms);
 }
 
-function addMessage(role, content, type = 'normal', capabilities = null, citations = null) {
+function addMessage(role, content, type = 'normal', capabilities = null, citations = null, opts) {
+  opts = opts || {};
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
   
@@ -6250,6 +6501,8 @@ function addMessage(role, content, type = 'normal', capabilities = null, citatio
     renderAssistantAnswerWithCitations(contentDiv, content, citeList, contentDiv);
   } else if (type === 'html' || (typeof content === 'string' && content.includes('<'))) {
     contentDiv.innerHTML = content;
+  } else if (role === 'assistant' && type !== 'error') {
+    contentDiv.innerHTML = linkifyPlainTextWithCitations(content, []);
   } else {
     contentDiv.textContent = content;
   }
@@ -6266,11 +6519,15 @@ function addMessage(role, content, type = 'normal', capabilities = null, citatio
     appendRelatedMaterialsTab(messageDiv, citeList);
   }
   if (role === 'assistant' && type !== 'error') {
-    appendAssistantMessageActions(messageDiv);
+    appendAssistantMessageActions(messageDiv, {
+      messageId: opts.messageId,
+      feedback: opts.feedback
+    });
   }
   
   elements.chatMessages.appendChild(messageDiv);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
+  return messageDiv;
 }
 
 // 添加文件消息卡片
@@ -6887,7 +7144,7 @@ function updateStreamingMessage(thinkingContent, conclusionContent) {
     console.log('思考内容为空，隐藏');
   }
   
-  // 更新结论内容
+  // 更新结论内容（流式阶段先纯文本，避免半截 Markdown 闪烁；收尾由 finalize 再格式化）
   if (conclusionContent && conclusionContent.trim()) {
     conclusionDiv.textContent = conclusionContent;
     conclusionDiv.style.display = 'block';
@@ -7220,7 +7477,8 @@ function parseJsonAndExtractConclusion(jsonString) {
 }
 
 // 添加完整的合并消息（非流式）
-function addCombinedMessage(thinkingContent, conclusionContent, capabilities, citations) {
+function addCombinedMessage(thinkingContent, conclusionContent, capabilities, citations, opts) {
+  opts = opts || {};
   console.log('=== addCombinedMessage 被调用 ===');
   console.log('思考内容长度:', thinkingContent ? thinkingContent.length : 0);
   console.log('结论内容长度:', conclusionContent ? conclusionContent.length : 0);
@@ -7305,7 +7563,7 @@ function addCombinedMessage(thinkingContent, conclusionContent, capabilities, ci
     if (citeList.length) {
       renderAssistantAnswerWithCitations(conclusionDiv, conclusionContent, citeList, messageWrapper);
     } else {
-      conclusionDiv.textContent = conclusionContent;
+      conclusionDiv.innerHTML = linkifyPlainTextWithCitations(conclusionContent, []);
     }
     console.log('✅ 结论内容已添加到消息');
   } else {
@@ -7326,7 +7584,10 @@ function addCombinedMessage(thinkingContent, conclusionContent, capabilities, ci
   if (citeListForTab.length) {
     appendRelatedMaterialsTab(messageWrapper, citeListForTab);
   }
-  appendAssistantMessageActions(messageWrapper);
+  appendAssistantMessageActions(messageWrapper, {
+    messageId: opts.messageId,
+    feedback: opts.feedback
+  });
   
   elements.chatMessages.appendChild(messageWrapper);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
@@ -7463,6 +7724,10 @@ async function addMessageToServer(sessionId, role, content, extra) {
     return;
   }
 
+  if (currentSession && currentSession.sessionId === sessionId) {
+    await ensureSessionPersistedOnServer();
+  }
+
   if (role === 'assistant' && currentSession && currentSession._pendingCapabilities) {
     extra = extra || {};
     if (!extra.capabilities) extra.capabilities = currentSession._pendingCapabilities;
@@ -7510,6 +7775,7 @@ async function addMessageToServer(sessionId, role, content, extra) {
     
     const result = await response.json();
     console.log('✅ 消息已保存到服务端:', result);
+    return result && result.message_id != null ? result.message_id : null;
   } catch (error) {
     if (error.name === 'AbortError') {
       console.warn('⚠️ 保存消息到服务端超时，但不影响主流程');
@@ -7517,6 +7783,7 @@ async function addMessageToServer(sessionId, role, content, extra) {
       console.error('⚠️ 添加消息到服务端失败，但不影响主流程:', error);
     }
     // 不抛出错误，避免阻塞主流程
+    return null;
   }
 }
 
@@ -7854,6 +8121,7 @@ async function handleHomePageInput() {
         if (currentSession && currentSession.sessionId !== createdSessionId) {
           console.log('切换会话ID到已创建的会话');
           currentSession.sessionId = createdSessionId;
+          currentSession._serverPersisted = true;
           // 清空聊天消息
           if (elements.chatMessages) {
             elements.chatMessages.innerHTML = '';
@@ -7869,7 +8137,8 @@ async function handleHomePageInput() {
             stage: 'idle',
             contextCache: {},
             createdAt: new Date().toISOString(),
-            conversationHistory: []
+            conversationHistory: [],
+            _serverPersisted: true
           };
         }
         
@@ -8566,30 +8835,116 @@ function restoreHistoryMessage(msg) {
     return;
   }
   if (msg.role === 'assistant') {
-    const content = msg.content || '';
-    const citations = msg.citations || (msg.extra && msg.extra.citations) || null;
-    const separator = '==JSON==';
-    const separatorIndex = content.indexOf(separator);
-    if (separatorIndex !== -1) {
-      const thinkingContent = content.substring(0, separatorIndex).trim();
-      const conclusionContent = content.substring(separatorIndex + separator.length).trim();
-      addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities, citations);
-    } else {
-      const doubleLineBreakIndex = content.indexOf('\n\n');
-      if (doubleLineBreakIndex !== -1 && doubleLineBreakIndex < content.length / 3 && !msg.artifact) {
-        const thinkingContent = content.substring(0, doubleLineBreakIndex).trim();
-        const conclusionContent = content.substring(doubleLineBreakIndex + 2).trim();
-        addCombinedMessage(thinkingContent, conclusionContent, msg.capabilities, citations);
-      } else if (content) {
-        addMessage(msg.role, content, 'normal', msg.capabilities, citations);
-      }
-    }
-    if (msg.artifact && msg.artifact.file_id) {
-      addOrchestrateDownload(msg.artifact);
-    }
+    const msgOpts = {
+      messageId: msg.id,
+      feedback: msg.feedback || (msg.extra && msg.extra.feedback) || null
+    };
+    // Match live multi-turn layout: process panel + answer + related materials + actions
+    const el = restoreOrchestrateHistoryMessage(msg, msgOpts);
+    if (el && msg.id != null) setAssistantMessageId(el, msg.id);
     return;
   }
   addMessage(msg.role, msg.content);
+}
+
+/** Visible answer text from a stored assistant message (drop legacy thinking prefix). */
+function assistantHistoryVisibleText(msg) {
+  let content = (msg && msg.content) || '';
+  const separator = '==JSON==';
+  const separatorIndex = content.indexOf(separator);
+  if (separatorIndex !== -1) {
+    return content.substring(separatorIndex + separator.length).trim();
+  }
+  return content;
+}
+
+function hydrateOrchestrateDataFromHistoryMessage(msg) {
+  const extra = (msg && msg.extra) || {};
+  const capabilities = msg.capabilities || extra.capabilities || {};
+  const citations = msg.citations || extra.citations || [];
+  return {
+    visible_text: assistantHistoryVisibleText(msg),
+    citations: citations,
+    capabilities: capabilities,
+    plan: msg.plan != null ? msg.plan : extra.plan,
+    past_steps: msg.past_steps || extra.past_steps || [],
+    status: msg.status || extra.status || 'complete',
+    artifact: msg.artifact || extra.artifact,
+    external_search: msg.external_search || extra.external_search || null,
+    flow: (capabilities && capabilities.flow) || msg.flow || extra.flow || []
+  };
+}
+
+/** Build settled live-strip flow from stored capabilities or past_steps. */
+function buildFlowFromHistoryData(data) {
+  let flow = (data && data.capabilities && data.capabilities.flow) || (data && data.flow) || [];
+  if (Array.isArray(flow) && flow.length) {
+    return flow.map(function (item) {
+      if (!item || typeof item !== 'object') return item;
+      const st = String(item.status || '').toLowerCase();
+      return Object.assign({}, item, {
+        status: st === 'running' || st === 'current' ? 'done' : st || 'done'
+      });
+    });
+  }
+  const past = (data && data.past_steps) || [];
+  if (!Array.isArray(past) || !past.length) return [];
+  return past.map(function (p, i) {
+    const meta =
+      typeof orchestrateToolMeta === 'function'
+        ? orchestrateToolMeta(p && p.tool)
+        : { kind: 'tool', label: (p && p.tool) || '步骤' };
+    const step = p && p.step ? String(p.step).replace(/\s+/g, ' ').trim() : '';
+    const short = step.length > 48 ? step.slice(0, 47) + '…' : step;
+    return {
+      kind: meta.kind || 'tool',
+      id: (p && p.tool) || 'past-' + i,
+      name: short ? meta.label + ' — ' + short : meta.label,
+      status: 'done'
+    };
+  });
+}
+
+/**
+ * Rebuild an assistant bubble with the same structure as a live orchestrate turn:
+ * flowSlot (执行过程) → answer → related-materials-tab → actions.
+ */
+function restoreOrchestrateHistoryMessage(msg, msgOpts) {
+  msgOpts = msgOpts || {};
+  const data = hydrateOrchestrateDataFromHistoryMessage(msg);
+  const shell = addOrchestrateProgressShell();
+  const flow = buildFlowFromHistoryData(data);
+  if (flow.length && shell.flowSlot) {
+    shell.flowSlot.hidden = false;
+    renderOrchestrateLiveStrip(shell.flowSlot, flow, { collapsed: true });
+  }
+  registerOrchestrateTurn(shell, data);
+  const answer = (data.visible_text || '').trim();
+  if (shell.answer) {
+    shell.answer.hidden = !answer;
+    if (answer) {
+      renderAssistantAnswerWithCitations(
+        shell.answer,
+        answer,
+        collectOrchestrateCitations(data),
+        shell.content
+      );
+    } else {
+      shell.answer.innerHTML = '';
+    }
+  }
+  if (typeof renderExternalSearchHint === 'function') {
+    renderExternalSearchHint(shell.content, data.external_search);
+  }
+  if (shell.wrap) {
+    attachOrchestrateTurnTab(shell, shell.wrap.getAttribute('data-turn-id'));
+    appendRelatedMaterialsTab(shell.wrap, collectOrchestrateCitations(data));
+    appendAssistantMessageActions(shell.wrap, msgOpts);
+  }
+  if (data.artifact && data.artifact.file_id) {
+    addOrchestrateDownload(data.artifact);
+  }
+  return shell.wrap;
 }
 
 async function restoreGeneratedFilesForSession(sessionId, history) {
@@ -8644,7 +8999,8 @@ async function loadSession(sessionId) {
       updatedAt: session.updated_at,
       conversationHistory: session.conversation_history || [],
       title: session.title || '',
-      lastUserInput: session.last_user_input || ''
+      lastUserInput: session.last_user_input || '',
+      _serverPersisted: true
     };
     
   elements.chatMessages.innerHTML = '';

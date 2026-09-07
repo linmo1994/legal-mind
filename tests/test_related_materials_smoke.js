@@ -9,8 +9,8 @@ assert.ok(html.includes('id="relatedMaterials"'));
 assert.ok(html.includes('id="relatedMaterialsBackdrop"'));
 assert.ok(html.includes('id="relatedMaterialsClose"'));
 assert.ok(html.includes('id="relatedMaterialsBody"'));
-assert.ok(html.includes('mcp_client.css?v=20260907rel1'));
-assert.ok(html.includes('mcp_client.js?v=20260907rel1'));
+assert.ok(html.includes('mcp_client.css?v=20260907sess1'));
+assert.ok(html.includes('mcp_client.js?v=20260907sess1'));
 assert.ok(js.includes("relatedMaterials: document.getElementById('relatedMaterials')"));
 assert.ok(js.includes("relatedMaterialsBody: document.getElementById('relatedMaterialsBody')"));
 assert.ok(js.includes('function openRelatedMaterials'));
@@ -25,7 +25,7 @@ assert.ok(
     js.includes('// Spec: do not render inline')
 );
 assert.ok(js.includes('.related-materials-tab'));
-assert.ok(html.includes('20260907rel1'));
+assert.ok(html.includes('20260907sess1'));
 assert.ok(css.includes('.related-materials-tab'));
 assert.ok(css.includes('chat-area.is-related-open'));
 assert.ok(css.includes('@media (max-width: 899px)'));

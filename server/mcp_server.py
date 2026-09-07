@@ -2462,10 +2462,12 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_PATCH(self):
-        """处理 PATCH 请求（知识库元数据更新等）"""
+        """处理 PATCH 请求（知识库元数据更新、会话消息反馈等）"""
         path = self.path.split('?')[0]
         if path.startswith('/api/admin/kb'):
             self._handle_kb_api('PATCH')
+        elif path.startswith('/api/sessions'):
+            self._handle_session_api(path, method='PATCH')
         else:
             self.send_response(404)
             self.end_headers()
@@ -2652,6 +2654,69 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         self.send_header('Access-Control-Allow-Origin', '*')
                         self.end_headers()
                         self.wfile.write(json.dumps({"error": f"更新会话失败: {str(e)}"}).encode('utf-8'))
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
+            elif method == 'PATCH':
+                # PATCH /api/sessions/{session_id}/messages/{message_id}
+                parts = [p for p in path.split('/') if p]
+                # ['api', 'sessions', sid, 'messages', mid]
+                if (
+                    len(parts) == 5
+                    and parts[0] == 'api'
+                    and parts[1] == 'sessions'
+                    and parts[3] == 'messages'
+                ):
+                    session_id = parts[2]
+                    try:
+                        message_id = int(parts[4])
+                    except (TypeError, ValueError):
+                        self.send_response(400)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "无效的 message_id"}).encode('utf-8'))
+                        return
+                    content_length = int(self.headers.get('Content-Length', 0))
+                    post_data = self.rfile.read(content_length) if content_length else b'{}'
+                    try:
+                        data = json.loads(post_data.decode('utf-8') or '{}')
+                    except json.JSONDecodeError:
+                        self.send_response(400)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "无效 JSON"}).encode('utf-8'))
+                        return
+                    if 'feedback' not in data:
+                        self.send_response(400)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "缺少 feedback"}).encode('utf-8'))
+                        return
+                    try:
+                        out = session_service.update_message_feedback(
+                            session_id, message_id, data.get('feedback')
+                        )
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps(out, ensure_ascii=False).encode('utf-8'))
+                    except KeyError:
+                        self.send_response(404)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "消息不存在"}).encode('utf-8'))
+                    except ValueError as e:
+                        self.send_response(400)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
                 else:
                     self.send_response(404)
                     self.end_headers()

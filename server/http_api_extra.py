@@ -633,12 +633,16 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
                 extra["past_steps"] = result["past_steps"]
             if result.get("status"):
                 extra["status"] = result["status"]
-            session_service.add_message(
+            cites = result.get("citations")
+            if cites:
+                extra["citations"] = cites
+            assistant_message_id = session_service.add_message(
                 session_id,
                 "assistant",
                 assistant_text,
                 extra=extra or None,
             )
+            result["assistant_message_id"] = assistant_message_id
             saved = True
         except Exception as exc:
             print(f"[orchestrate] persist session messages failed: {exc}")

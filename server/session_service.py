@@ -293,10 +293,10 @@ class SessionService:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT role, content, timestamp, extra
+            SELECT id, role, content, timestamp, extra
             FROM messages 
             WHERE session_id = ? 
-            ORDER BY timestamp ASC
+            ORDER BY timestamp ASC, id ASC
         """, (session_id,))
         
         rows = cursor.fetchall()
@@ -304,7 +304,12 @@ class SessionService:
         
         messages = []
         for row in rows:
-            item = {'role': row['role'], 'content': row['content']}
+            item = {
+                'id': row['id'],
+                'role': row['role'],
+                'content': row['content'],
+                'timestamp': row['timestamp'],
+            }
             extra_raw = row['extra'] if 'extra' in row.keys() else None
             if extra_raw:
                 try:
@@ -312,18 +317,84 @@ class SessionService:
                 except (TypeError, json.JSONDecodeError):
                     extra = None
                 if isinstance(extra, dict):
+                    item['extra'] = extra
                     if extra.get('artifact'):
                         item['artifact'] = extra['artifact']
                     if extra.get('file_ids'):
                         item['file_ids'] = extra['file_ids']
                     if extra.get('capabilities'):
                         item['capabilities'] = extra['capabilities']
+                    if extra.get('citations'):
+                        item['citations'] = extra['citations']
+                    if extra.get('plan') is not None:
+                        item['plan'] = extra['plan']
+                    if extra.get('past_steps'):
+                        item['past_steps'] = extra['past_steps']
+                    if extra.get('status'):
+                        item['status'] = extra['status']
+                    fb = extra.get('feedback')
+                    if fb in ('like', 'dislike'):
+                        item['feedback'] = fb
             messages.append(item)
         return messages
+
+    def update_message_feedback(
+        self, session_id: str, message_id: int, feedback: Optional[str]
+    ) -> Dict:
+        """Set or clear message feedback (like / dislike) in messages.extra."""
+        if feedback not in (None, '', 'like', 'dislike'):
+            raise ValueError("feedback must be like, dislike, or empty")
+        norm = feedback if feedback in ('like', 'dislike') else None
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, session_id, role, content, timestamp, extra
+            FROM messages
+            WHERE id = ? AND session_id = ?
+            """,
+            (int(message_id), session_id),
+        )
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            raise KeyError(f"message not found: {message_id}")
+
+        extra: Dict = {}
+        if row['extra']:
+            try:
+                parsed = json.loads(row['extra'])
+                if isinstance(parsed, dict):
+                    extra = parsed
+            except (TypeError, json.JSONDecodeError):
+                extra = {}
+        if norm:
+            extra['feedback'] = norm
+        else:
+            extra.pop('feedback', None)
+        extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
+        cursor.execute(
+            "UPDATE messages SET extra = ? WHERE id = ? AND session_id = ?",
+            (extra_json, int(message_id), session_id),
+        )
+        cursor.execute(
+            "UPDATE sessions SET updated_at = ? WHERE session_id = ?",
+            (datetime.now().isoformat(), session_id),
+        )
+        conn.commit()
+        conn.close()
+        return {
+            'message_id': int(message_id),
+            'session_id': session_id,
+            'feedback': norm,
+        }
     
     def list_sessions(self, limit: int = 100) -> List[Dict]:
         """
-        获取会话列表
+        获取会话列表（仅含至少一条消息的会话）。
         
         Args:
             limit: 返回数量限制
@@ -336,13 +407,33 @@ class SessionService:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+
+        # Drop empty shells so they never accumulate in the sidebar.
+        cursor.execute(
+            """
+            DELETE FROM sessions
+            WHERE session_id NOT IN (
+                SELECT DISTINCT session_id FROM messages
+            )
+            """
+        )
+        if cursor.rowcount:
+            print(f"[SessionService] purged {cursor.rowcount} empty session(s)")
+        conn.commit()
         
-        cursor.execute("""
-            SELECT session_id, title, status, created_at, updated_at, last_user_input, last_user_input_time
-            FROM sessions
-            ORDER BY updated_at DESC
+        cursor.execute(
+            """
+            SELECT s.session_id, s.title, s.status, s.created_at, s.updated_at,
+                   s.last_user_input, s.last_user_input_time
+            FROM sessions s
+            WHERE EXISTS (
+                SELECT 1 FROM messages m WHERE m.session_id = s.session_id LIMIT 1
+            )
+            ORDER BY s.updated_at DESC
             LIMIT ?
-        """, (limit,))
+            """,
+            (limit,),
+        )
         
         rows = cursor.fetchall()
         conn.close()
