@@ -12,6 +12,7 @@ from rbac_store import (
     ACCOUNT_STATUS_CODES,
     CASE_CONTRACT_FILE_MAX,
     CASE_EVIDENCE_FILE_MAX,
+    CASE_STAGE_CODES,
     CASE_STATUS_ASSIGNED,
     CASE_STATUS_CODES,
     CASE_STATUSES,
@@ -22,7 +23,9 @@ from rbac_store import (
     CLIENT_TYPES,
     FIRM_TRACK_ROLES,
     RbacStore,
+    can_transition_stage,
     normalize_account_status,
+    normalize_case_stage,
 )
 
 
@@ -77,11 +80,13 @@ class RbacHttpApi:
         auth: AuthService,
         rbac: RbacService,
         file_service=None,
+        approval_store=None,
     ):
         self.store = store
         self.auth = auth
         self.rbac = rbac
         self.file_service = file_service
+        self.approval_store = approval_store
 
     def _ensure_case_evidence_briefs(self, evidence_ids: List[str]) -> None:
         fs = getattr(self, "file_service", None)
@@ -594,6 +599,55 @@ class RbacHttpApi:
             "members": self.store.list_case_members(case_id),
             "clients": clients,
         })
+
+    def advance_case_stage(
+        self,
+        authorization: Optional[str],
+        case_id: int,
+        body: Dict[str, Any],
+    ) -> StatusPayload:
+        gated = self.require_user(authorization)
+        if gated[0] != 200:
+            return gated
+        user = gated[1]["user"]
+        case = self.store.get_case(case_id)
+        if not case:
+            return _deny(404, "案件不存在")
+        member = self.store.get_case_member(case_id, user["id"])
+        if not member:
+            return _deny(403, "无权操作该案件")
+        case_role = member.get("role_code") or ""
+        can_advance = (
+            self.rbac.require(user["id"], "cap.case_stage_advance", case_id)
+            or case_role in ("lead_lawyer", "partner", "director")
+        )
+        if not can_advance:
+            return _deny(403, "无权限推进案件阶段")
+        to_stage = (body.get("to") or "").strip()
+        if to_stage not in CASE_STAGE_CODES:
+            return _deny(400, "无效的目标阶段")
+        current = case.get("status") or ""
+        if not can_transition_stage(current, to_stage):
+            return _deny(400, "不允许的阶段跳转")
+        try:
+            updated = self.store.update_case_stage(case_id, to_stage)
+        except ValueError as exc:
+            return _deny(400, str(exc))
+        if not updated:
+            return _deny(404, "案件不存在")
+        if self.approval_store is not None:
+            self.approval_store.write_audit(
+                actor_user_id=user["id"],
+                action="case_stage_advance",
+                object_type="case",
+                object_id=case_id,
+                case_id=case_id,
+                detail={
+                    "from": normalize_case_stage(current),
+                    "to": to_stage,
+                },
+            )
+        return _ok({"case": updated})
 
     def delete_case(self, authorization: Optional[str], case_id: int) -> StatusPayload:
         gated = self.require_perm(authorization, "cap.case_manage")

@@ -53,7 +53,9 @@ class MCPServer:
         self.auth_service = None
         self.rbac_service = None
         self.rbac_api = None
+        self.approval_store = None
         try:
+            from approval_store import ApprovalStore
             from auth_service import AuthService
             from http_rbac_api import RbacHttpApi
             from rbac_service import RbacService
@@ -72,8 +74,16 @@ class MCPServer:
             self.auth_service = AuthService(self.rbac_store)
             self.auth_service.ensure_seed_director()
             self.rbac_service = RbacService(self.rbac_store)
-            self.rbac_api = RbacHttpApi(self.rbac_store, self.auth_service, self.rbac_service)
+            self.approval_store = ApprovalStore("./approval.db", rbac_store=self.rbac_store)
+            self.approval_store.ensure_schema()
+            self.rbac_api = RbacHttpApi(
+                self.rbac_store,
+                self.auth_service,
+                self.rbac_service,
+                approval_store=self.approval_store,
+            )
             print(f"[MCP Server] RBAC 服务初始化成功: {rbac_db}")
+            print("[MCP Server] ApprovalStore 初始化成功: ./approval.db")
         except Exception as e:
             print(f"[MCP Server] 警告：RBAC 服务初始化失败: {e}")
 
@@ -1303,6 +1313,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self._handle_rbac_api('POST')
             return
         if path == '/api/admin/cases' or path.startswith('/api/admin/cases/'):
+            self._handle_rbac_api('POST')
+            return
+        if path.startswith('/api/cases/') and path.endswith('/stage'):
             self._handle_rbac_api('POST')
             return
         if path == '/api/admin/clients' or path.startswith('/api/admin/clients/'):
@@ -3268,6 +3281,12 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/admin/cases/") and method == "DELETE" and "/members/" not in path:
                 case_id = int(path.rstrip("/").split("/")[-1])
                 self._write_json(*api.delete_case(authz, case_id))
+                return
+
+            if path.startswith("/api/cases/") and path.endswith("/stage") and method == "POST":
+                parts = path.rstrip("/").split("/")
+                case_id = int(parts[3])
+                self._write_json(*api.advance_case_stage(authz, case_id, body))
                 return
 
             if path == "/api/admin/clients" and method == "GET":

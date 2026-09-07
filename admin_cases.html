@@ -140,7 +140,7 @@
     <p id="status" class="muted"></p>
     <button type="button" class="btn-primary" id="btnNew">新建案件</button>
     <table class="admin-table" style="width:100%;margin-top:12px;border-collapse:collapse;background:#fff;">
-      <thead><tr><th>案号</th><th>类型</th><th>案件名称</th><th>状态</th><th></th></tr></thead>
+      <thead><tr><th>案号</th><th>类型</th><th>案件名称</th><th>阶段</th><th></th></tr></thead>
       <tbody id="caseTb"></tbody>
     </table>
   </div>
@@ -427,6 +427,30 @@
       }
       return "";
     }
+    function stageLabel(c) {
+      return c.stage_label || statusLabel(c.status);
+    }
+    async function advanceCaseStage(c) {
+      const to = c.next_stage;
+      if (!to) return;
+      const label = c.next_stage_label || to;
+      const ok = await AdminUI.confirmAction({
+        title: "推进案件阶段",
+        message: "确认将案件「" + (c.case_no || "") + "」推进至「" + label + "」？",
+        okText: "推进"
+      });
+      if (!ok) return;
+      try {
+        await api("/api/cases/" + c.id + "/stage", {
+          method: "POST",
+          body: JSON.stringify({ to: to })
+        });
+        AdminUI.toast("阶段已更新为「" + label + "」", true);
+        await loadCases();
+      } catch (e) {
+        AdminUI.toast(e.message, false);
+      }
+    }
     function statusLabel(code) {
       const hit = caseStatuses.find(function (s) { return s.code === code; });
       return (hit && hit.label) || code || "—";
@@ -621,7 +645,7 @@
       tb.innerHTML = "";
       (data.cases || []).forEach(function (c) {
         const tr = document.createElement("tr");
-        const label = c.status_label || statusLabel(c.status);
+        const label = stageLabel(c);
         const typeText = c.case_type_label || typeLabel(c.case_type);
         tr.innerHTML = "<td>" + AdminUI.esc(c.case_no) + "</td><td>" + AdminUI.esc(typeText) +
           "</td><td>" + AdminUI.esc(c.title) +
@@ -633,6 +657,9 @@
           b.type = "button"; b.className = "btn-ghost"; b.textContent = text;
           b.onclick = function (e) { e.stopPropagation(); fn(); };
           actions.appendChild(b);
+        }
+        if (c.next_stage) {
+          addBtn("推进至" + (c.next_stage_label || c.next_stage), function () { advanceCaseStage(c); });
         }
         addBtn("详情", function () { viewCase(c.id); });
         addBtn("编辑", function () { editCase(c.id); });
@@ -651,7 +678,7 @@
         "<p>案号：" + AdminUI.esc(c.case_no) + "</p>" +
         "<p>类型：" + AdminUI.esc(c.case_type_label || typeLabel(c.case_type)) + "</p>" +
         "<p>案件名称：" + AdminUI.esc(c.title) + "</p>" +
-        "<p>状态：" + AdminUI.esc(c.status_label || statusLabel(c.status)) + "</p></div>" +
+        "<p>阶段：" + AdminUI.esc(c.stage_label || stageLabel(c)) + "</p></div>" +
         '<div class="detail-block"><h4>委托客户</h4>' +
         (caseClients.length
           ? "<ul>" + caseClients.map(function (cl) {

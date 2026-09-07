@@ -341,6 +341,9 @@ def enrich_case(row: Dict[str, Any]) -> Dict[str, Any]:
     stage = normalize_case_stage(item.get("status"))
     item["stage"] = stage
     item["stage_label"] = CASE_STAGE_LABELS.get(stage, stage)
+    nxt = next_stage(stage)
+    item["next_stage"] = nxt
+    item["next_stage_label"] = CASE_STAGE_LABELS.get(nxt, "") if nxt else ""
     meta: Dict[str, Any] = {}
     raw = item.get("meta_json")
     if raw:
@@ -954,6 +957,22 @@ class RbacStore:
                     case_id,
                 ),
             )
+        conn.commit()
+        conn.close()
+        return self.get_case(case_id)
+
+    def update_case_stage(self, case_id: int, stage: str) -> Optional[Dict[str, Any]]:
+        if stage not in CASE_STAGE_CODES:
+            raise ValueError(f"invalid case stage: {stage}")
+        case = self.get_case(case_id)
+        if not case:
+            return None
+        now = datetime.now().isoformat()
+        conn = self._connect()
+        conn.execute(
+            "UPDATE cases SET status = ?, updated_at = ? WHERE id = ?",
+            (stage, now, case_id),
+        )
         conn.commit()
         conn.close()
         return self.get_case(case_id)
