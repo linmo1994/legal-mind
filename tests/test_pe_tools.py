@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
+import io
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
+
+from docx import Document
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "server"))
@@ -320,6 +324,108 @@ class TestPeTools(unittest.TestCase):
         self.assertTrue(isinstance(saved.get("data"), (bytes, bytearray)))
         self.assertGreater(len(saved["data"]), 20)
         self.assertEqual(saved.get("session_id"), "sess-1")
+
+    def test_draft_doc_fills_matched_element_template(self):
+        doc = Document()
+        t1 = doc.add_table(rows=1, cols=1)
+        t1.cell(0, 0).text = "原告：{原告}"
+        t2 = doc.add_table(rows=1, cols=2)
+        t2.cell(0, 0).text = "被告"
+        t2.cell(0, 1).text = ""
+        tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        doc.save(tmp.name)
+        tmp.close()
+        template_path = tmp.name
+        self.addCleanup(lambda: os.path.exists(template_path) and os.unlink(template_path))
+
+        saved = {}
+
+        class FakeKb:
+            def list_documents(self, doc_type="template", limit=200, offset=0):
+                return [
+                    {
+                        "id": "t1",
+                        "doc_type": "template",
+                        "file_id": "f-template",
+                        "title": "民间借贷纠纷起诉状",
+                        "status": "ready",
+                        "meta": {
+                            "template_name": "民间借贷纠纷起诉状",
+                            "document_type": "起诉状",
+                            "validity": "有效",
+                        },
+                    }
+                ]
+
+        class FakeFS:
+            def get_file(self, file_id):
+                return {"file_path": template_path, "file_id": file_id}
+
+            def save_file(self, data, filename, session_id=None, description=None):
+                saved["data"] = data
+                saved["filename"] = filename
+                saved["session_id"] = session_id
+                return {"file_id": "filled-docx-1", "original_name": filename}
+
+        def write_llm(system, user, hist=None):
+            return ""
+
+        out = run_tool(
+            "draft_doc",
+            {"prompt": "请写民间借贷纠纷起诉状，原告张三被告李四"},
+            {
+                "write_llm": write_llm,
+                "kb_store": FakeKb(),
+                "file_service": FakeFS(),
+                "objective": "请写民间借贷纠纷起诉状",
+                "session_id": "sess-tmpl",
+            },
+        )
+        self.assertIn("模版", out["observation"])
+        self.assertIn("要素式", out["observation"])
+        art = out.get("artifact") or {}
+        self.assertEqual(art.get("file_id"), "filled-docx-1")
+        self.assertTrue(isinstance(saved.get("data"), (bytes, bytearray)))
+        filled = Document(io.BytesIO(saved["data"]))
+        self.assertIn("张三", filled.tables[0].cell(0, 0).text)
+        self.assertIn("李四", filled.tables[1].cell(0, 1).text)
+
+    def test_draft_doc_unmatched_mentions_fallback(self):
+        class FakeKb:
+            def list_documents(self, doc_type="template", limit=200, offset=0):
+                return [
+                    {
+                        "id": "t2",
+                        "doc_type": "template",
+                        "file_id": "f2",
+                        "title": "劳动争议仲裁申请书",
+                        "status": "ready",
+                        "meta": {
+                            "template_name": "劳动争议仲裁申请书",
+                            "document_type": "申请书",
+                            "validity": "有效",
+                        },
+                    }
+                ]
+
+        class FakeFS:
+            def save_file(self, data, filename, session_id=None, description=None):
+                return {"file_id": "fid-free", "original_name": filename}
+
+        def write_llm(system, user, hist=None):
+            return "自由起草正文"
+
+        out = run_tool(
+            "draft_doc",
+            {"prompt": "随便写点闲聊"},
+            {
+                "write_llm": write_llm,
+                "kb_store": FakeKb(),
+                "file_service": FakeFS(),
+            },
+        )
+        self.assertIn("未命中模版", out["observation"])
+        self.assertIn("自由起草正文", out["observation"])
 
 
 if __name__ == "__main__":

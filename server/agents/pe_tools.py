@@ -68,6 +68,53 @@ def _infer_draft_title(text: str) -> str:
     return "法律文书"
 
 
+def _load_template_docx_bytes(file_service: Any, file_id: Optional[str]) -> Optional[bytes]:
+    if not file_service or not file_id:
+        return None
+    info = file_service.get_file(file_id)
+    if not isinstance(info, dict):
+        return None
+    path = info.get("file_path")
+    if path:
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except Exception:
+            pass
+    get_bytes = getattr(file_service, "get_file_bytes", None)
+    if callable(get_bytes):
+        try:
+            data = get_bytes(file_id)
+            if data:
+                return data
+        except Exception:
+            pass
+    return None
+
+
+def _artifact_from_saved_docx(
+    info: Dict[str, Any],
+    *,
+    title: str,
+    preview: str = "",
+) -> Optional[Dict[str, Any]]:
+    file_id = info.get("file_id")
+    if not file_id:
+        return None
+    preview = (preview or "").strip()
+    if len(preview) > 600:
+        preview = preview[:600] + "…"
+    filename = info.get("original_name") or f"{title}.docx"
+    return {
+        "filename": filename,
+        "file_id": file_id,
+        "download_url": f"/api/files/{file_id}/download",
+        "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "title": title,
+        "preview": preview,
+    }
+
+
 def _export_docx_artifact(
     title: str,
     body: str,
@@ -345,6 +392,98 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
             from case_materials import format_user_with_case_context
 
             prompt = format_user_with_case_context(prompt, case_context)
+        query = str(ctx.get("objective") or prompt)
+        kb_store = ctx.get("kb_store")
+        file_service = ctx.get("file_service")
+        session_id = ctx.get("session_id")
+        hit = None
+        if kb_store is not None:
+            from kb_template_resolve import match_template
+
+            hit = match_template(kb_store, query)
+
+        if hit and file_service:
+            raw = _load_template_docx_bytes(file_service, hit.get("file_id"))
+            tmpl_name = hit.get("name") or "模版"
+            if raw:
+                from docx_form_fill import (
+                    build_element_dict,
+                    fill_docx_bytes,
+                    has_fillable_slots,
+                    scan_slots_from_document,
+                )
+
+                if has_fillable_slots(raw):
+                    import io
+
+                    from docx import Document
+
+                    doc = Document(io.BytesIO(raw))
+                    slots = scan_slots_from_document(doc)
+                    slot_keys = [s["key"] for s in slots]
+                    elements = build_element_dict(
+                        prompt,
+                        slot_keys=slot_keys,
+                        write_llm=write_llm,
+                    )
+                    filled = fill_docx_bytes(raw, elements)
+                    filename = f"{tmpl_name}.docx"
+                    try:
+                        info = file_service.save_file(
+                            filled,
+                            filename,
+                            session_id=session_id,
+                            description="plan_execute draft_doc",
+                        )
+                    except Exception as exc:
+                        print(f"[pe_tools] draft_doc template fill save failed: {exc}")
+                        info = None
+                    if isinstance(info, dict) and info.get("file_id"):
+                        filled_summary = "、".join(
+                            f"{k}={v}"
+                            for k, v in elements.items()
+                            if v and str(v).strip()
+                        )
+                        obs = f"已根据模版《{tmpl_name}》填写要素式文书。"
+                        if filled_summary:
+                            obs += f"\n已填要素：{filled_summary}"
+                        artifact = _artifact_from_saved_docx(
+                            info,
+                            title=tmpl_name,
+                            preview=obs,
+                        )
+                        return {"observation": _trim(obs), "citations": [], "artifact": artifact}
+                else:
+                    if not write_llm:
+                        return {"observation": "write_llm unavailable for draft_doc", "citations": []}
+                    from kb_template_resolve import resolve_template_text
+
+                    template_text, _, _ = resolve_template_text(
+                        tmpl_name,
+                        kb_store=kb_store,
+                        file_service=file_service,
+                        vector_service=ctx.get("vector_service"),
+                    )
+                    if not template_text:
+                        get_text = getattr(file_service, "get_file_text", None)
+                        if callable(get_text):
+                            template_text = (get_text(hit.get("file_id")) or "").strip()
+                    skills = ctx.get("skills")
+                    system = _draft_doc_system_prompt(skills if isinstance(skills, list) else [])
+                    system += f"\n已匹配知识库模版《{tmpl_name}》（非表格填槽），请参照模版结构与表述起草完整文书正文。"
+                    if template_text:
+                        system += f"\n【模版参考，禁止原样照抄未改写段落】\n{template_text[:8000]}"
+                    try:
+                        body = write_llm(system, prompt, ctx.get("messages") or []) or ""
+                    except Exception as exc:
+                        return {"observation": f"draft_doc failed: {exc}", "citations": []}
+                    title = str(args.get("title") or ctx.get("doc_title") or "").strip()
+                    if not title:
+                        title = _infer_draft_title(str(prompt or "") + " " + str(ctx.get("objective") or ""))
+                    artifact = _export_docx_artifact(title, body, file_service, session_id=session_id)
+                    obs = f"已套用模版《{tmpl_name}》（非表格填槽）。\n\n{body}"
+                    return {"observation": _trim(obs), "citations": [], "artifact": artifact}
+
         if not write_llm:
             return {"observation": "write_llm unavailable for draft_doc", "citations": []}
         skills = ctx.get("skills")
@@ -380,10 +519,14 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
         artifact = _export_docx_artifact(
             title,
             body,
-            ctx.get("file_service"),
-            session_id=ctx.get("session_id"),
+            file_service,
+            session_id=session_id,
         )
-        return {"observation": _trim(body), "citations": [], "artifact": artifact}
+        observation = body
+        # Only prefix when kb_store was present but template match failed (backward compat).
+        if kb_store is not None and hit is None:
+            observation = f"未命中模版库，已按说明自由起草。\n\n{observation}"
+        return {"observation": _trim(observation), "citations": [], "artifact": artifact}
 
     if name == "reason":
         prompt = str(args.get("prompt") or args.get("instruction") or ctx.get("objective") or "")
