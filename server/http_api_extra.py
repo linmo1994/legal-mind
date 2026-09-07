@@ -539,6 +539,7 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
     skills = skill_service().match(user_text, limit=3)
     retrieve_fn = make_retrieve_fn(mcp_server)
     file_service = getattr(mcp_server, "file_service", None)
+    kb_store = getattr(mcp_server, "kb_store", None)
     tracer = WorkflowTracer(on_event=on_event)
     token = bind_workflow(tracer)
 
@@ -606,6 +607,7 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
             permitted_case_ids=permitted_case_ids,
             resume_state=body.get("resume_state"),
             case_context=case_ctx or "",
+            kb_store=kb_store,
         )
     finally:
         reset_workflow(token)

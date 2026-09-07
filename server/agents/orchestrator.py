@@ -918,6 +918,7 @@ def run_orchestrate(
     permitted_case_ids=None,
     resume_state=None,
     case_context: str = "",
+    kb_store=None,
 ) -> Dict[str, Any]:
     messages = messages or []
     skills = skills or []
@@ -967,6 +968,7 @@ def run_orchestrate(
                                 session_id=session_id,
                                 resume_state=resume_state,
                                 case_context=case_context,
+                                kb_store=kb_store,
                             )
                             return attach_call_flow(pe, workflow)
                         except Exception as exc:

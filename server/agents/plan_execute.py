@@ -773,6 +773,7 @@ def run_plan_execute(
     session_id=None,
     resume_state=None,
     case_context: str = "",
+    kb_store=None,
     max_plan_steps: int = MAX_PLAN_STEPS,
     max_replans: int = MAX_REPLANS,
     max_tool_calls: int = MAX_TOOL_CALLS,
@@ -805,6 +806,7 @@ def run_plan_execute(
         "case_context": case_context,
         "skills": skills,
         "session_id": session_id,
+        "kb_store": kb_store,
     }
 
     if resume_state:
