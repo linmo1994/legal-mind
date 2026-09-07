@@ -383,12 +383,62 @@ class TestPeTools(unittest.TestCase):
         )
         self.assertIn("模版", out["observation"])
         self.assertIn("要素式", out["observation"])
+        self.assertIn("请下载核阅", out["observation"])
+        self.assertIn("【待补充】", out["observation"])
         art = out.get("artifact") or {}
         self.assertEqual(art.get("file_id"), "filled-docx-1")
         self.assertTrue(isinstance(saved.get("data"), (bytes, bytearray)))
         filled = Document(io.BytesIO(saved["data"]))
         self.assertIn("张三", filled.tables[0].cell(0, 0).text)
         self.assertIn("李四", filled.tables[1].cell(0, 1).text)
+
+    def test_draft_doc_save_failure_after_fill(self):
+        doc = Document()
+        t = doc.add_table(rows=1, cols=1)
+        t.cell(0, 0).text = "原告：{原告}"
+        tmp = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        doc.save(tmp.name)
+        tmp.close()
+        template_path = tmp.name
+        self.addCleanup(lambda: os.path.exists(template_path) and os.unlink(template_path))
+
+        class FakeKb:
+            def list_documents(self, doc_type="template", limit=200, offset=0):
+                return [
+                    {
+                        "id": "t1",
+                        "doc_type": "template",
+                        "file_id": "f-template",
+                        "title": "民间借贷纠纷起诉状",
+                        "status": "ready",
+                        "meta": {
+                            "template_name": "民间借贷纠纷起诉状",
+                            "document_type": "起诉状",
+                            "validity": "有效",
+                        },
+                    }
+                ]
+
+        class FakeFS:
+            def get_file(self, file_id):
+                return {"file_path": template_path, "file_id": file_id}
+
+            def save_file(self, data, filename, session_id=None, description=None):
+                raise RuntimeError("disk full")
+
+        out = run_tool(
+            "draft_doc",
+            {"prompt": "请写民间借贷纠纷起诉状，原告张三"},
+            {
+                "write_llm": lambda s, u, h=None: "不应走到自由起草",
+                "kb_store": FakeKb(),
+                "file_service": FakeFS(),
+                "objective": "请写民间借贷纠纷起诉状",
+            },
+        )
+        self.assertIn("保存失败", out["observation"])
+        self.assertNotIn("不应走到自由起草", out["observation"])
+        self.assertIsNone(out.get("artifact"))
 
     def test_draft_doc_unmatched_mentions_fallback(self):
         class FakeKb:
