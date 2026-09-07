@@ -3296,6 +3296,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self._write_json(400, {"error": "知识库请求失败", "detail": str(e)})
 
     def _handle_orchestrate_api(self):
+        from orchestrate_sse_util import sse_data_line
+        headers_sent = False
         try:
             from http_api_extra import handle_orchestrate
             body = self._read_json_body() or {}
@@ -3317,15 +3319,14 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.send_header('Access-Control-Allow-Private-Network', 'true')
                 self.end_headers()
+                headers_sent = True
 
                 def on_event(event):
-                    payload = json.dumps({"type": "step", **event}, ensure_ascii=False)
-                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.write(sse_data_line({"type": "step", **event}))
                     self.wfile.flush()
 
                 result = handle_orchestrate(MCPHTTPHandler.server_instance, body, on_event=on_event)
-                done = json.dumps({"type": "done", "result": result}, ensure_ascii=False)
-                self.wfile.write(f"data: {done}\n\n".encode("utf-8"))
+                self.wfile.write(sse_data_line({"type": "done", "result": result}))
                 self.wfile.flush()
                 return
             result = handle_orchestrate(MCPHTTPHandler.server_instance, body)
@@ -3333,6 +3334,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         except Exception as e:
             import traceback
             print(f"[ERROR] orchestrate: {e}\n{traceback.format_exc()}")
+            if headers_sent:
+                self.wfile.write(sse_data_line({"type": "error", "error": "任务编排失败", "detail": str(e)}))
+                self.wfile.flush()
+                return
             self._write_json(400, {"error": "任务编排失败", "detail": str(e)})
 
     def _handle_skills_api(self, method: str):

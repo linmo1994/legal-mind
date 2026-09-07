@@ -196,10 +196,80 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
         if not retrieve_fn:
             return {"observation": "retrieve_fn unavailable", "citations": []}
         raw = retrieve_fn(query, scopes=["case"]) or {}
-        return {
-            "observation": _observation_from_retrieve(raw, "case"),
-            "citations": _citations_from_retrieve(raw),
+        cites = _citations_from_retrieve(raw)
+        # Defense in depth: drop citations that fail the same relevance gate as hits.
+        try:
+            from http_api_extra import prefer_hits_matching_case_query
+
+            pseudo_hits = [
+                {
+                    "document": (c.get("snippet") or c.get("text") or ""),
+                    "metadata": {
+                        "title": c.get("title") or "",
+                        "case_no": c.get("title") or "",
+                        "doc_type": "case",
+                        "file_id": c.get("file_id"),
+                        "document_id": c.get("document_id"),
+                    },
+                }
+                for c in cites
+                if isinstance(c, dict)
+            ]
+            kept_meta = {
+                (
+                    (h.get("metadata") or {}).get("file_id") or "",
+                    (h.get("metadata") or {}).get("document_id") or "",
+                    (h.get("metadata") or {}).get("title") or "",
+                )
+                for h in prefer_hits_matching_case_query(pseudo_hits, query)
+            }
+            cites = [
+                c
+                for c in cites
+                if (
+                    c.get("file_id") or "",
+                    c.get("document_id") or "",
+                    c.get("title") or "",
+                )
+                in kept_meta
+            ]
+        except Exception:
+            pass
+        cases_text = str(raw.get("cases") or "")
+        if cites and cases_text:
+            # Rebuild observation from kept citations only (hide unrelated neighbors).
+            parts = []
+            for c in cites:
+                title = (c.get("title") or "").strip() or "类案"
+                snip = (c.get("snippet") or "").strip()
+                parts.append(f"《{title}》\n{snip}" if snip else f"《{title}》")
+            cases_text = "\n\n".join(parts)
+        elif not cites:
+            cases_text = ""
+        out = {
+            "observation": cases_text
+            if cases_text
+            else _observation_from_retrieve(
+                {**raw, "cases": cases_text, "case_citations": cites}, "case"
+            ),
+            "citations": cites,
         }
+        from kb_external_hint import (
+            assess_case_retrieve_miss,
+            build_case_external_search_hint,
+        )
+
+        reason = assess_case_retrieve_miss(
+            query, citations=cites, cases_text=cases_text
+        )
+        if reason:
+            out["observation"] = (
+                "本地知识库未命中相关类案（已过滤与查询关键词不相关的结果）。"
+                "请换更贴切的检索词，或补充类案入库后再试。"
+            )
+            out["citations"] = []
+            out["external_search"] = build_case_external_search_hint(query, reason)
+        return out
 
     if name == "read_evidence":
         from case_materials import get_case_evidence_text, resolve_cases_for_file_id

@@ -7,8 +7,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "server"))
 
 from agents.plan_execute import (  # noqa: E402
+    EXECUTOR_SYSTEM,
     MAX_REPLANS,
     MAX_TOOL_CALLS,
+    PLANNER_SYSTEM,
+    REPLAN_SYSTEM,
+    _CASE_RETRIEVE_STEP,
+    _LAW_RETRIEVE_STEP,
+    _ensure_retrieve_steps,
     run_plan_execute,
 )
 from agents.workflow import (  # noqa: E402
@@ -288,6 +294,122 @@ class TestPlanExecute(unittest.TestCase):
         self.assertTrue(str(art.get("filename") or "").endswith(".docx"))
         tools = [p.get("tool") for p in (out.get("past_steps") or [])]
         self.assertIn("draft_doc", tools)
+
+    def test_prompts_mention_retrieve_tools(self):
+        self.assertIn("retrieve_law", PLANNER_SYSTEM)
+        self.assertIn("retrieve_case", PLANNER_SYSTEM)
+        self.assertIn("retrieve_law", EXECUTOR_SYSTEM)
+        self.assertIn("retrieve_case", REPLAN_SYSTEM)
+
+    def test_ensure_retrieve_steps_injects_law_when_article_query(self):
+        plan = ["直接给出结论"]
+        out = _ensure_retrieve_steps(
+            "请检索劳动合同法第64条并回答",
+            plan,
+            [],
+            max_steps=8,
+        )
+        self.assertTrue(any("法规" in s or "法条" in s for s in out[:2]))
+        self.assertLessEqual(len(out), 8)
+
+    def test_ensure_retrieve_steps_injects_when_plan_only_mentions_legal(self):
+        out = _ensure_retrieve_steps(
+            "劳动合同法第64条非全日制用工要点",
+            ["分析法律责任"],
+            [],
+            max_steps=8,
+        )
+        self.assertIn(_LAW_RETRIEVE_STEP, out)
+        self.assertEqual(out[0], _LAW_RETRIEVE_STEP)
+
+    def test_ensure_retrieve_steps_skips_if_retrieve_law_done(self):
+        plan = ["给出结论"]
+        past = [{"tool": "retrieve_law", "observation": "..."}]
+        out = _ensure_retrieve_steps(
+            "劳动合同法第六十四条",
+            plan,
+            past,
+            max_steps=8,
+        )
+        self.assertEqual(out, ["给出结论"])
+
+    def test_ensure_retrieve_steps_injects_case_when_requested(self):
+        plan = ["分析争议焦点"]
+        out = _ensure_retrieve_steps(
+            "帮我检索类似案例作为参考",
+            plan,
+            [],
+            max_steps=8,
+        )
+        self.assertTrue(any("类案" in s or "案例" in s for s in out[:2]))
+
+    def test_ensure_retrieve_steps_dual_for_win_analysis(self):
+        """Entity-law advice (e.g. 胜诉) defaults to both law and case retrieve."""
+        out = _ensure_retrieve_steps(
+            "张三借了我1万元，请帮我分析是否能胜诉",
+            ["直接给出结论"],
+            [],
+            max_steps=8,
+        )
+        self.assertEqual(out[0], _LAW_RETRIEVE_STEP)
+        self.assertEqual(out[1], _CASE_RETRIEVE_STEP)
+        self.assertIn("直接给出结论", out)
+
+    def test_ensure_retrieve_steps_case_only_strips_law(self):
+        """Explicit case lookup must not inject or keep law retrieve steps."""
+        out = _ensure_retrieve_steps(
+            "查找餐饮服务合同违约10倍赔偿的案例",
+            ["检索相关法规并整理可引用条文", "直接回答"],
+            [],
+            max_steps=8,
+        )
+        self.assertEqual(out[0], _CASE_RETRIEVE_STEP)
+        self.assertNotIn(_LAW_RETRIEVE_STEP, out)
+        self.assertTrue(all("法规" not in s and "法条" not in s for s in out))
+
+    def test_ensure_retrieve_steps_law_only_skips_case(self):
+        out = _ensure_retrieve_steps(
+            "请检索劳动合同法第64条",
+            ["检索相关类案并整理可引用案例", "回答"],
+            [],
+            max_steps=8,
+        )
+        self.assertIn(_LAW_RETRIEVE_STEP, out)
+        self.assertNotIn(_CASE_RETRIEVE_STEP, out)
+
+    def test_injected_law_step_runs_retrieve(self):
+        def write_llm(system, user, hist=None):
+            s = system or ""
+            if "步骤列表" in s or "规划" in s:
+                return '{"plan":["直接回答非全日制要点"]}'
+            if "选一个工具" in s:
+                # first step should be injected retrieve
+                return '{"tool":"retrieve_law","args":{"query":"劳动合同法第六十四条"}}'
+            return '{"action":"response","response":"依据《中华人民共和国劳动合同法》第六十四条……"}'
+
+        def retrieve(query, scopes=None):
+            return {
+                "laws": "…",
+                "law_citations": [
+                    {
+                        "title": "中华人民共和国劳动合同法",
+                        "article": "第六十四条",
+                        "file_id": "f1",
+                    }
+                ],
+                "case_citations": [],
+            }
+
+        out = run_plan_execute(
+            objective="请检索劳动合同法第64条并引用法条回答非全日制用工要点",
+            messages=[],
+            write_llm=write_llm,
+            retrieve_fn=retrieve,
+        )
+        self.assertEqual(out["status"], "complete")
+        tools = [p.get("tool") for p in out.get("past_steps") or []]
+        self.assertIn("retrieve_law", tools)
+        self.assertTrue(out.get("citations"))
 
 
 if __name__ == "__main__":

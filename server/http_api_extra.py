@@ -77,12 +77,215 @@ def prefer_hits_matching_articles(hits: list, query: str = "") -> list:
     return matched
 
 
-def hits_to_citations(hits: list, query: str = "") -> list:
+_CASE_QUERY_STOPWORDS = frozenset(
+    {
+        "检索",
+        "类案",
+        "案例",
+        "判例",
+        "相关",
+        "帮我",
+        "请",
+        "一下",
+        "看看",
+        "有没有",
+        "是否",
+        "查找",
+        "搜索",
+        "本地",
+        "知识库",
+        "回答",
+        "分析",
+        "说明",
+        "要点",
+    }
+)
+
+# Too generic alone — must not keep an unrelated judgment.
+_CASE_WEAK_KEYWORDS = frozenset(
+    {
+        "合同",
+        "违约",
+        "纠纷",
+        "赔偿",
+        "服务",
+        "诉讼",
+        "原告",
+        "被告",
+        "法院",
+        "判决",
+        "裁定",
+        "借款",
+        "担保",
+        "保证",
+        "责任",
+        "相关",
+        "问题",
+        "情况",
+    }
+)
+
+
+def case_query_keywords(query: str) -> List[str]:
+    """Content tokens from a case-search query (drop retrieval boilerplate)."""
+    import re
+
+    text = (query or "").strip()
+    if not text:
+        return []
+    text = re.sub(r"第[一二三四五六七八九十百千零〇\d]+条", " ", text)
+    text = re.sub(r"(?<![A-Za-z0-9])[一二三四五六七八九十百千零〇\d]{1,8}条", " ", text)
+    for sw in sorted(_CASE_QUERY_STOPWORDS, key=len, reverse=True):
+        if sw in text:
+            text = text.replace(sw, " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    raw = re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z0-9][A-Za-z0-9\-]{1,}", text)
+    out: List[str] = []
+    seen = set()
+
+    def _add(tok: str) -> None:
+        t = (tok or "").strip().rstrip("的了吗呢啊呀")
+        if not t or t.isdigit() or t in _CASE_QUERY_STOPWORDS:
+            return
+        if t in seen:
+            return
+        seen.add(t)
+        out.append(t)
+
+    for tok in raw:
+        _add(tok)
+        # Long CJK runs → 3/4-char windows so「餐饮服务合同违约」可命中「餐饮服务」
+        if len(tok) > 4 and re.fullmatch(r"[\u4e00-\u9fff]+", tok or ""):
+            for n in (4, 3):
+                for i in range(0, len(tok) - n + 1):
+                    piece = tok[i : i + n]
+                    if piece in _CASE_WEAK_KEYWORDS:
+                        continue
+                    _add(piece)
+    return out
+
+
+def _case_hit_match_score(blob: str, keywords: List[str]) -> int:
+    """Higher = more relevant. Digits/weak unigrams do not count."""
+    score = 0
+    for kw in keywords or []:
+        if not kw or kw.isdigit() or kw in _CASE_WEAK_KEYWORDS:
+            continue
+        if kw not in blob:
+            continue
+        score += 2 if len(kw) >= 4 else 1
+    return score
+
+
+def prefer_hits_matching_case_query(hits: list, query: str = "") -> list:
+    """Keep only case chunks with meaningful keyword overlap.
+
+    Vector Top-K always returns neighbors when the case collection is small;
+    weak overlap (e.g. bare「合同」) must not keep unrelated judgments in
+    citations or the model context.
+    """
+    keywords = case_query_keywords(query)
+    if not keywords:
+        # No usable stems → treat as miss (do not dump entire case KB).
+        return []
+    matched: List[Any] = []
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("metadata") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        blob = " ".join(
+            [
+                str(meta.get("title") or ""),
+                str(meta.get("case_no") or ""),
+                str(hit.get("document") or hit.get("text") or ""),
+            ]
+        )
+        # Need a real topical stem (len>=4) or two shorter non-weak stems.
+        if _case_hit_match_score(blob, keywords) >= 2:
+            matched.append(hit)
+    return matched
+
+
+def resolve_kb_file_id(store, *, document_id: str = "", title: str = "", doc_type: str = ""):
+    """Look up kb_documents for file_id. Returns (file_id|None, row|None).
+
+    When get_document finds a row without file_id, returns that row for
+    title/doc_type backfill and still tries title search for file_id.
+    """
+    if store is None:
+        return None, None
+    doc_id = (document_id or "").strip()
+    id_row = None
+    if doc_id:
+        try:
+            id_row = store.get_document(doc_id)
+        except Exception:
+            id_row = None
+        if id_row and id_row.get("file_id"):
+            return id_row.get("file_id"), id_row
+    title_q = (title or "").strip()
+    if not title_q and id_row:
+        title_q = (id_row.get("title") or "").strip()
+    if not title_q:
+        title_q = doc_id
+    if not title_q and not id_row:
+        return None, None
+    dt_hint = doc_type or (id_row or {}).get("doc_type") or ""
+    if dt_hint in ("law", "case"):
+        types = [dt_hint]
+    else:
+        types = ["law", "case"]
+    for dt in types:
+        try:
+            rows = store.find_documents_by_title(doc_type=dt, title=title_q, limit=5)
+        except Exception:
+            rows = []
+        for row in rows or []:
+            if row.get("file_id"):
+                if id_row:
+                    merged = dict(row)
+                    merged["id"] = id_row.get("id") or merged.get("id")
+                    merged["title"] = id_row.get("title") or merged.get("title")
+                    merged["doc_type"] = id_row.get("doc_type") or merged.get("doc_type")
+                    return merged.get("file_id"), merged
+                return row.get("file_id"), row
+    if id_row:
+        return None, id_row
+    return None, None
+
+
+def make_resolve_doc_from_store(store):
+    def resolve_doc(document_id, title, doc_type):
+        fid, row = resolve_kb_file_id(
+            store,
+            document_id=document_id or "",
+            title=title or "",
+            doc_type=doc_type or "",
+        )
+        if not row and not fid:
+            return None
+        out = {
+            "file_id": fid or (row or {}).get("file_id") or None,
+            "title": (row or {}).get("title") or title,
+            "doc_type": (row or {}).get("doc_type") or doc_type,
+            "document_id": (row or {}).get("id") or document_id,
+        }
+        if out.get("file_id") or row:
+            return out
+        return None
+
+    return resolve_doc
+
+
+def hits_to_citations(hits: list, query: str = "", *, resolve_doc=None) -> list:
     """Convert vector/FTS search hits into structured citation dicts.
 
-    Dedupes by (file_id|document_id|title) + article so one law+article
+    Laws dedupe by (file_id|document_id|title) + article so one law+article
     yields a single link even when multiple chunks match.
-    Article labels follow hit text (query article only if present in the chunk).
+    Cases dedupe by case identity only — judgment text often cites statutes
+    (「第×条」); those must not become case "articles" or duplicate links.
     """
     try:
         from kb_query_parse import resolve_hit_article
@@ -98,18 +301,38 @@ def hits_to_citations(hits: list, query: str = "") -> list:
         if not isinstance(meta, dict):
             meta = {}
         doc = (hit.get("document") or hit.get("text") or "").strip()
+        file_id = meta.get("file_id") or None
+        document_id = meta.get("document_id") or ""
         title = (
             meta.get("title") or meta.get("law_name") or meta.get("case_no") or ""
         ).strip()
-        if resolve_hit_article:
+        doc_type = meta.get("doc_type") or ""
+        if (not file_id or not title or not doc_type) and callable(resolve_doc):
+            try:
+                resolved = resolve_doc(document_id, title, doc_type)
+            except Exception:
+                resolved = None
+            if isinstance(resolved, dict):
+                file_id = file_id or resolved.get("file_id") or None
+                title = title or (resolved.get("title") or "").strip()
+                doc_type = doc_type or resolved.get("doc_type") or ""
+                if resolved.get("document_id") and (
+                    not document_id or document_id == title
+                ):
+                    document_id = resolved.get("document_id") or document_id
+        # Cases are not statutes: never attach 「第×条」 from chunk/query text.
+        if doc_type == "case":
+            article = None
+        elif resolve_hit_article:
             article = resolve_hit_article(doc, query)
         else:
             article = None
-        file_id = meta.get("file_id") or None
-        document_id = meta.get("document_id") or ""
-        dedupe_key = (
-            f"{file_id or ''}|{document_id}|{title}|{article or ''}"
-        )
+        if doc_type == "case":
+            dedupe_key = f"case|{file_id or ''}|{document_id}|{title}"
+        else:
+            dedupe_key = (
+                f"{file_id or ''}|{document_id}|{title}|{article or ''}"
+            )
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
@@ -121,7 +344,7 @@ def hits_to_citations(hits: list, query: str = "") -> list:
         out.append(
             {
                 "id": hit.get("id") or "",
-                "doc_type": meta.get("doc_type") or "",
+                "doc_type": doc_type,
                 "document_id": document_id,
                 "file_id": file_id,
                 "title": title,
@@ -135,16 +358,32 @@ def hits_to_citations(hits: list, query: str = "") -> list:
 
 def make_kb_retrieve_fn(mcp_server):
     """Retrieve from knowledge-base vectors with doc_type scopes (law/case)."""
+    store = getattr(mcp_server, "kb_store", None)
+    resolve_doc = make_resolve_doc_from_store(store) if store else None
+
+    def _ensure_fts(vs) -> None:
+        """Background VectorService promote often skips FTS; attach before hybrid search."""
+        if vs is None or getattr(vs, "fts", None):
+            return
+        if getattr(mcp_server, "vector_service", None) is not vs:
+            mcp_server.vector_service = vs
+        attach = getattr(mcp_server, "_attach_fts_if_ready", None)
+        if callable(attach):
+            try:
+                attach()
+            except Exception as exc:
+                print(f"[kb_retrieve] FTS attach failed: {exc}")
 
     def _vector():
         vs = getattr(mcp_server, "vector_service", None)
+        if not vs:
+            inst = getattr(mcp_server, "_vector_service_instance", None)
+            if isinstance(inst, (list, tuple)) and inst and inst[0]:
+                mcp_server.vector_service = inst[0]
+                vs = inst[0]
         if vs:
-            return vs
-        inst = getattr(mcp_server, "_vector_service_instance", None)
-        if isinstance(inst, (list, tuple)) and inst and inst[0]:
-            mcp_server.vector_service = inst[0]
-            return inst[0]
-        return None
+            _ensure_fts(vs)
+        return vs
 
     def _search_scoped(vs, q: str, doc_type: str) -> list:
         pool = 5
@@ -163,9 +402,11 @@ def make_kb_retrieve_fn(mcp_server):
         except Exception as exc:
             print(f"[kb_retrieve] {doc_type} search failed: {exc}")
             return []
-        hits = prefer_hits_matching_articles(hits or [], q) if doc_type == "law" else list(
-            hits or []
-        )
+        hits = list(hits or [])
+        if doc_type == "law":
+            hits = prefer_hits_matching_articles(hits, q)
+        elif doc_type == "case":
+            hits = prefer_hits_matching_case_query(hits, q)
         return hits[:5]
 
     def retrieve(query: str, scopes=None) -> Dict[str, Any]:
@@ -185,11 +426,11 @@ def make_kb_retrieve_fn(mcp_server):
         if "law" in scopes:
             hits = _search_scoped(vs, q, "law")
             out["laws"] = format_kb_hits(hits)
-            out["law_citations"] = hits_to_citations(hits, q)
+            out["law_citations"] = hits_to_citations(hits, q, resolve_doc=resolve_doc)
         if "case" in scopes:
             hits = _search_scoped(vs, q, "case")
             out["cases"] = format_kb_hits(hits)
-            out["case_citations"] = hits_to_citations(hits, q)
+            out["case_citations"] = hits_to_citations(hits, q, resolve_doc=resolve_doc)
         return out
 
     return retrieve

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind（MCP）</title>
-  <link rel="stylesheet" href="index.css?v=20260905accountmenu">
+  <link rel="stylesheet" href="index.css?v=20260907nav1">
 </head>
 <body>
   <header class="navbar">
@@ -169,6 +169,30 @@
       if (!menu || menu.hidden) return;
       if (!menu.contains(e.target)) closeUserMenu();
     });
+    // iframe 内点击不会冒泡到壳层 document，需额外收起下拉
+    window.addEventListener('blur', function () {
+      setTimeout(function () {
+        const ae = document.activeElement;
+        if (ae && ae.id === 'mainFrame') closeUserMenu();
+      }, 0);
+    });
+    (function bindMainFrameOutsideClose() {
+      const frame = document.getElementById('mainFrame');
+      if (!frame) return;
+      function attach() {
+        try {
+          const doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+          if (!doc || doc.documentElement.getAttribute('data-nav-menu-close') === '1') return;
+          doc.documentElement.setAttribute('data-nav-menu-close', '1');
+          doc.addEventListener('pointerdown', closeUserMenu, true);
+          doc.addEventListener('click', closeUserMenu, true);
+        } catch (err) {
+          /* cross-origin */
+        }
+      }
+      frame.addEventListener('load', attach);
+      attach();
+    })();
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
         closeContactModal();

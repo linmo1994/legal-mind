@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind（MCP）</title>
-  <link rel="stylesheet" href="mcp_client.css?v=20260906busy2">
+  <link rel="stylesheet" href="mcp_client.css?v=20260907rel1">
   <script>
     // 检测file://协议并提示
     if (window.location.protocol === 'file:') {
@@ -130,16 +130,28 @@
           </div>
         </div>
 
-        <aside id="orchestrateWorkbench" class="orchestrate-workbench" aria-label="编排工作台">
+        <aside id="orchestrateWorkbench" class="orchestrate-workbench" aria-label="执行过程">
           <div class="orchestrate-workbench-header">
-            <span class="orchestrate-workbench-title">编排工作台</span>
-            <button type="button" id="orchestrateWorkbenchClose" class="orchestrate-workbench-close" title="关闭" aria-label="关闭工作台">×</button>
+            <span class="orchestrate-workbench-title">执行过程</span>
+            <button type="button" id="orchestrateWorkbenchClose" class="orchestrate-workbench-close" title="关闭" aria-label="关闭执行过程">×</button>
           </div>
           <div id="orchestrateWorkbenchBody" class="orchestrate-workbench-body">
-            <p class="orchestrate-workbench-empty">本轮无编排过程</p>
+            <p class="orchestrate-workbench-empty">本轮暂无过程记录</p>
           </div>
         </aside>
         <div id="orchestrateWorkbenchBackdrop" class="orchestrate-workbench-backdrop" hidden></div>
+        <aside id="relatedMaterials" class="related-materials" aria-label="相关资料" hidden>
+          <div class="related-materials-header">
+            <span class="related-materials-title">相关资料</span>
+            <button type="button" id="relatedMaterialsClose" class="related-materials-close" title="关闭" aria-label="关闭相关资料">×</button>
+          </div>
+          <div class="related-materials-segments" role="tablist" aria-label="资料类型">
+            <button type="button" class="related-materials-segment is-active" data-segment="law" role="tab" aria-selected="true">法规</button>
+            <button type="button" class="related-materials-segment" data-segment="case" role="tab" aria-selected="false">案例</button>
+          </div>
+          <div id="relatedMaterialsBody" class="related-materials-body" role="tabpanel"></div>
+        </aside>
+        <div id="relatedMaterialsBackdrop" class="related-materials-backdrop" hidden></div>
       </div>
     </div>
 
@@ -152,7 +164,8 @@
 
   <script src="auth.js?v=20260906case1"></script>
   <script src="admin_kb_files.js?v=20260905preview"></script>
-  <script src="mcp_client.js?v=20260906busy2"></script>
+  <script src="orchestrate_live_flow.js?v=20260907proc1"></script>
+  <script src="mcp_client.js?v=20260907rel1"></script>
 </body>
 </html>
 

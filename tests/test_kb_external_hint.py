@@ -4,7 +4,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "server"))
 
 from kb_external_hint import (
+    assess_case_retrieve_miss,
     assess_law_retrieve_miss,
+    build_case_external_search_hint,
     build_external_search_hint,
 )
 
@@ -56,3 +58,25 @@ class TestKbExternalHint(unittest.TestCase):
         self.assertIn("未自动抓取", h["note"])
         self.assertIn("劳动", h["query"])
         self.assertTrue("64" in h["query"] or "六十四" in h["query"])
+
+    def test_case_miss_empty(self):
+        self.assertEqual(
+            assess_case_retrieve_miss("食品服务合同", citations=[], cases_text=""),
+            "empty",
+        )
+
+    def test_case_hit_no_miss(self):
+        self.assertIsNone(
+            assess_case_retrieve_miss(
+                "民间借贷",
+                citations=[{"title": "（2025）最高法民再142号"}],
+                cases_text="……",
+            )
+        )
+
+    def test_build_case_hint(self):
+        h = build_case_external_search_hint("食品服务合同 十倍赔偿", "empty")
+        self.assertTrue(h["needed"])
+        self.assertEqual(h["provider"], "court_wenshu")
+        self.assertIn("wenshu.court.gov.cn", h["url"])
+        self.assertIn("类案", h["note"])

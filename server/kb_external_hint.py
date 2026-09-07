@@ -10,7 +10,9 @@ from kb_query_parse import (
 )
 
 NPC_FLK_HOME = "https://flk.npc.gov.cn/"
+COURT_WENSHU_HOME = "https://wenshu.court.gov.cn/"
 NOTE = "本地知识库未命中；未自动抓取外网正文，请打开官网核对。"
+CASE_NOTE = "本地知识库未命中相关类案；未自动抓取外网正文，请打开官网核对或补充入库。"
 
 
 def title_matches_law_hint(title: str, hint: str) -> bool:
@@ -125,4 +127,31 @@ def build_external_search_hint(query: str, reason: str) -> Dict[str, Any]:
         "label": "国家法律法规数据库",
         "url": url,
         "note": NOTE + (f" 建议检索词：{sq}" if sq else ""),
+    }
+
+
+def assess_case_retrieve_miss(
+    query: str,
+    *,
+    citations: list = None,
+    cases_text: str = "",
+) -> Optional[str]:
+    """Return miss reason when case retrieve should not surface weak neighbors."""
+    cites = [c for c in (citations or []) if isinstance(c, dict)]
+    text = (cases_text or "").strip()
+    if not cites and not text:
+        return "empty"
+    return None
+
+
+def build_case_external_search_hint(query: str, reason: str) -> Dict[str, Any]:
+    sq = (query or "").strip()
+    return {
+        "needed": True,
+        "reason": reason,
+        "query": sq,
+        "provider": "court_wenshu",
+        "label": "中国裁判文书网",
+        "url": COURT_WENSHU_HOME,
+        "note": CASE_NOTE + (f" 建议检索词：{sq}" if sq else ""),
     }

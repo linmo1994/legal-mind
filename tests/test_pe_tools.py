@@ -178,6 +178,72 @@ class TestPeTools(unittest.TestCase):
         )
         self.assertFalse(out.get("external_search"))
 
+    def test_retrieve_case_filters_irrelevant_citations(self):
+        def retrieve(q, scopes=None):
+            return {
+                "cases": "两案…",
+                "case_citations": [
+                    {
+                        "title": "（2023）粤2071民初27790号",
+                        "file_id": "f-food",
+                        "document_id": "kb_food",
+                        "snippet": "餐饮服务合同纠纷，主张十倍赔偿",
+                    },
+                    {
+                        "title": "（2025）最高法民再142号",
+                        "file_id": "f-loan",
+                        "document_id": "kb_loan",
+                        "snippet": "民间借贷担保纠纷保证责任",
+                    },
+                ],
+            }
+
+        out = run_tool(
+            "retrieve_case",
+            {"query": "查找餐饮服务合同违约10倍赔偿的案例"},
+            {"retrieve_fn": retrieve},
+        )
+        cites = out.get("citations") or []
+        self.assertEqual(len(cites), 1)
+        self.assertIn("粤2071", cites[0]["title"])
+        self.assertNotIn("最高法民再142", out.get("observation") or "")
+        self.assertFalse(out.get("external_search"))
+
+    def test_retrieve_case_miss_adds_external_search(self):
+        def retrieve(q, scopes=None):
+            return {"cases": "", "case_citations": []}
+
+        out = run_tool(
+            "retrieve_case",
+            {"query": "食品服务合同 十倍赔偿"},
+            {"retrieve_fn": retrieve},
+        )
+        self.assertEqual(out.get("citations") or [], [])
+        self.assertIn("未命中相关类案", out["observation"])
+        self.assertTrue(out.get("external_search", {}).get("needed"))
+        self.assertEqual(out["external_search"]["provider"], "court_wenshu")
+
+    def test_retrieve_case_hit_no_external_search(self):
+        def retrieve(q, scopes=None):
+            return {
+                "cases": "（2025）最高法民再142号\n民间借贷……",
+                "case_citations": [
+                    {
+                        "title": "（2025）最高法民再142号",
+                        "file_id": "f1",
+                        "snippet": "民间借贷担保纠纷……",
+                    }
+                ],
+            }
+
+        out = run_tool(
+            "retrieve_case",
+            {"query": "民间借贷担保"},
+            {"retrieve_fn": retrieve},
+        )
+        self.assertFalse(out.get("external_search"))
+        self.assertEqual(len(out.get("citations") or []), 1)
+
     def test_draft_doc_injects_doc_writing_skills(self):
         seen = {}
 

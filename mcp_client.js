@@ -153,7 +153,11 @@ function initElements() {
   orchestrateWorkbenchBody: document.getElementById('orchestrateWorkbenchBody'),
   orchestrateWorkbenchToggle: document.getElementById('orchestrateWorkbenchToggle'),
   orchestrateWorkbenchClose: document.getElementById('orchestrateWorkbenchClose'),
-  orchestrateWorkbenchBackdrop: document.getElementById('orchestrateWorkbenchBackdrop')
+  orchestrateWorkbenchBackdrop: document.getElementById('orchestrateWorkbenchBackdrop'),
+  relatedMaterials: document.getElementById('relatedMaterials'),
+  relatedMaterialsBody: document.getElementById('relatedMaterialsBody'),
+  relatedMaterialsClose: document.getElementById('relatedMaterialsClose'),
+  relatedMaterialsBackdrop: document.getElementById('relatedMaterialsBackdrop')
 };
   
   // 验证关键元素是否存在
@@ -460,6 +464,7 @@ async function init() {
     }
     console.log('✅ DOM元素初始化成功');
     initOrchestrateWorkbenchUi();
+    initRelatedMaterialsUi();
     setupHomeBackTab();
     
     // 加载配置（使用缓存）
@@ -4292,6 +4297,39 @@ async function loadActiveCaseOptions() {
   };
 }
 
+async function consumeOrchestrateSse(resp, handlers) {
+  handlers = handlers || {};
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let sawDone = false;
+  let sawError = false;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const parsed = parseSseChunk(buffer, decoder.decode(value, { stream: true }));
+    buffer = parsed.buffer;
+    for (let i = 0; i < parsed.events.length; i++) {
+      const ev = parsed.events[i];
+      if (ev.type === 'step') {
+        if (handlers.onStep) handlers.onStep(ev);
+      } else if (ev.type === 'done') {
+        sawDone = true;
+        if (handlers.onDone) handlers.onDone(ev.result);
+      } else if (ev.type === 'error') {
+        sawError = true;
+        if (handlers.onError) handlers.onError(ev);
+      }
+    }
+  }
+  const reportUnexpectedEnd = typeof shouldReportUnexpectedOrchestrateEnd === 'function'
+    ? shouldReportUnexpectedOrchestrateEnd(sawDone, sawError)
+    : !sawDone && !sawError;
+  if (reportUnexpectedEnd && handlers.onError) {
+    handlers.onError({ error: '编排流意外结束' });
+  }
+}
+
 function tryHandleOrchestrate(fullUserMessage) {
   return (async function() {
     if (!CONFIG || !CONFIG.mcpServerUrl) return false;
@@ -4335,6 +4373,8 @@ function tryHandleOrchestrate(fullUserMessage) {
       renderExternalSearchHint(targetShell.content, data.external_search);
       if (targetShell.wrap) {
         attachOrchestrateTurnTab(targetShell, targetShell.wrap.getAttribute('data-turn-id'));
+        appendRelatedMaterialsTab(targetShell.wrap, collectOrchestrateCitations(data));
+        appendAssistantMessageActions(targetShell.wrap);
       }
       const citations = collectOrchestrateCitations(data);
       if (data.artifact && data.artifact.file_id) {
@@ -4372,11 +4412,16 @@ function tryHandleOrchestrate(fullUserMessage) {
     }
 
     function doRequest(signal) {
+      const headers = Object.assign(
+        {},
+        (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
+          ? LegalMindAuth.authHeaders()
+          : { 'Content-Type': 'application/json' }
+      );
+      headers['Accept'] = 'text/event-stream';
       return fetch(`${CONFIG.mcpServerUrl}/api/orchestrate`, {
         method: 'POST',
-        headers: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
-          ? LegalMindAuth.authHeaders()
-          : { 'Content-Type': 'application/json' },
+        headers: headers,
         signal: signal,
         body: JSON.stringify({
           user_text: fullUserMessage,
@@ -4385,9 +4430,142 @@ function tryHandleOrchestrate(fullUserMessage) {
           case_id: (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.getCaseId)
             ? LegalMindAuth.getCaseId()
             : null,
-          resume_state: (typeof window !== 'undefined' && window.__orchestrateResumeState) || undefined
+          resume_state: (typeof window !== 'undefined' && window.__orchestrateResumeState) || undefined,
+          stream: true
         })
       });
+    }
+
+    function ensureOrchestrateTurnId(targetShell) {
+      let turnId = targetShell && targetShell.wrap && targetShell.wrap.getAttribute('data-turn-id');
+      if (!turnId) {
+        turnId = nextOrchestrateTurnId();
+        if (targetShell && targetShell.wrap) {
+          targetShell.wrap.setAttribute('data-turn-id', turnId);
+          targetShell.wrap.classList.add('orchestrate-turn');
+        }
+      }
+      return turnId;
+    }
+
+    function patchWorkbenchLiveFlow(targetShell, turnId, liveFlow) {
+      let view = orchestrateTurnViews.get(turnId);
+      if (!view) {
+        view = buildOrchestrateTurnView(turnId, {
+          capabilities: { flow: liveFlow },
+          status: 'running'
+        });
+        orchestrateTurnViews.set(turnId, view);
+      } else {
+        view.flow = Array.isArray(liveFlow) ? liveFlow : [];
+      }
+      for (let i = 0; i < (liveFlow || []).length; i++) {
+        const item = liveFlow[i];
+        if (!item || String(item.kind || '').toLowerCase() !== 'plan') continue;
+        const steps = item.detail && Array.isArray(item.detail.steps) ? item.detail.steps : null;
+        if (!steps) continue;
+        view.plan = steps.map(function (s) {
+          if (typeof s === 'string') return s;
+          return (s && (s.agent || s.name || s.step)) || JSON.stringify(s);
+        });
+      }
+      if (selectedOrchestrateTurnId !== turnId) {
+        selectOrchestrateTurn(turnId);
+      } else {
+        renderOrchestrateWorkbench();
+      }
+    }
+
+    function refreshOrchestrateLiveUi(targetShell, turnId, liveFlow) {
+      const stages = buildBusyStagesFromOrchestrate({ capabilities: { flow: liveFlow } }) ||
+        buildPlaceholderBusyStages();
+      BusyController.updateStages(stages);
+      patchWorkbenchLiveFlow(targetShell, turnId, liveFlow);
+      // 方案 A：仅气泡顶端展开过程，不自动打开底部抽屉
+      if (targetShell && targetShell.flowSlot) {
+        targetShell.flowSlot.hidden = false;
+        renderOrchestrateLiveStrip(targetShell.flowSlot, liveFlow, { collapsed: false });
+      }
+      attachOrchestrateTurnTab(targetShell, turnId);
+    }
+
+    async function finishOrchestrateSuccess(targetShell, data, opts) {
+      opts = opts || {};
+      if (data && data.legacy) {
+        if (opts.fromRetry) {
+          BusyController.end({ reason: 'error' });
+          attachRetry(targetShell, '当前请求需走旧路径，请刷新页面后重发。');
+          return { handled: true };
+        }
+        BusyController.end({ reason: 'success' });
+        if (targetShell && targetShell.wrap) targetShell.wrap.remove();
+        return { handled: false };
+      }
+      if (!data) {
+        BusyController.end({ reason: 'error' });
+        attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
+        return { handled: true };
+      }
+      clearOrchestrateRetry(targetShell);
+      const doneFlow = (data.capabilities && data.capabilities.flow) || data.flow || [];
+      // 正式回答：收起顶端「执行过程」；完整明细可由侧栏抽屉查看
+      BusyController.end({ reason: 'success' });
+      if (Array.isArray(doneFlow) && doneFlow.length && targetShell && targetShell.flowSlot) {
+        settleOrchestrateLiveStrip(targetShell.flowSlot);
+      } else if (targetShell && targetShell.flowSlot) {
+        targetShell.flowSlot.hidden = true;
+        targetShell.flowSlot.innerHTML = '';
+      }
+      const ok = await applyOrchestrateSuccess(targetShell, data, fullUserMessage);
+      if (!ok) {
+        attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
+        return { handled: true };
+      }
+      if (Array.isArray(doneFlow) && doneFlow.length && targetShell && targetShell.flowSlot) {
+        settleOrchestrateLiveStrip(targetShell.flowSlot);
+      }
+      return { handled: true };
+    }
+
+    async function consumeOrchestrateResponse(targetShell, resp, opts) {
+      opts = opts || {};
+      const turnId = ensureOrchestrateTurnId(targetShell);
+      const ct = String(resp.headers.get('content-type') || '').toLowerCase();
+      if (ct.indexOf('text/event-stream') < 0) {
+        const data = await resp.json();
+        return finishOrchestrateSuccess(targetShell, data, opts);
+      }
+
+      let liveFlow = [];
+      let finalResult = null;
+      let streamError = null;
+      attachOrchestrateTurnTab(targetShell, turnId);
+      if (targetShell && targetShell.flowSlot) {
+        targetShell.flowSlot.hidden = false;
+        renderOrchestrateLiveStrip(targetShell.flowSlot, [], { collapsed: false, waiting: true });
+      }
+      await consumeOrchestrateSse(resp, {
+        onStep: function (ev) {
+          liveFlow = mergeLiveFlow(liveFlow, ev);
+          refreshOrchestrateLiveUi(targetShell, turnId, liveFlow);
+        },
+        onDone: function (result) {
+          finalResult = result;
+        },
+        onError: function (ev) {
+          streamError = ev || { error: '编排流意外结束' };
+        }
+      });
+
+      if (streamError && !finalResult) {
+        BusyController.end({ reason: 'error' });
+        attachRetry(
+          targetShell,
+          (streamError && (streamError.error || streamError.detail)) || '服务暂时不可用，请稍后重试。'
+        );
+        return { handled: true };
+      }
+      return finishOrchestrateSuccess(targetShell, finalResult, opts);
     }
 
     function attachRetry(targetShell, errText) {
@@ -4412,29 +4590,10 @@ function tryHandleOrchestrate(fullUserMessage) {
             attachRetry(targetShell, errBody.error || ('请求失败 ' + resp.status));
             return;
           }
-          const data = await resp.json();
-          if (data && data.legacy) {
-            BusyController.end({ reason: 'error' });
-            attachRetry(targetShell, '当前请求需走旧路径，请刷新页面后重发。');
-            return;
-          }
-          if (!data) {
-            BusyController.end({ reason: 'error' });
-            attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
-            return;
-          }
-          clearOrchestrateRetry(targetShell);
-          const realStages = buildBusyStagesFromOrchestrate(data);
-          if (realStages) BusyController.updateStages(realStages);
-          const ok = await applyOrchestrateSuccess(targetShell, data, fullUserMessage);
-          if (!ok) {
-            BusyController.end({ reason: 'error' });
-            attachRetry(targetShell, '服务暂时不可用，请稍后重试。');
-            return;
-          }
-          BusyController.end({ reason: 'success' });
+          await consumeOrchestrateResponse(targetShell, resp, { fromRetry: true });
         } catch (e) {
           if (e && (e.name === 'AbortError' || e.code === 20)) {
+            settleOrchestrateLiveStrip(targetShell && targetShell.flowSlot);
             return;
           }
           BusyController.end({ reason: 'error' });
@@ -4445,8 +4604,8 @@ function tryHandleOrchestrate(fullUserMessage) {
 
     try {
       shell = addOrchestrateProgressShell();
+      ensureOrchestrateTurnId(shell);
       const controller = BusyController.start({ mode: 'orchestrate', mountEl: shell.content });
-      paintOrchestrateFlow(shell.flowSlot, [], 0, -1);
       const resp = await doRequest(controller.signal);
       if (resp.status === 401) {
         BusyController.end({ reason: 'error' });
@@ -4460,29 +4619,11 @@ function tryHandleOrchestrate(fullUserMessage) {
         attachRetry(shell, errBody.error || ('请求失败 ' + resp.status));
         return true;
       }
-      const data = await resp.json();
-      if (data && data.legacy) {
-        BusyController.end({ reason: 'success' });
-        if (shell && shell.wrap) shell.wrap.remove();
-        return false;
-      }
-      if (!data) {
-        BusyController.end({ reason: 'error' });
-        attachRetry(shell, '服务暂时不可用，请稍后重试。');
-        return true;
-      }
-      const realStages = buildBusyStagesFromOrchestrate(data);
-      if (realStages) BusyController.updateStages(realStages);
-      const ok = await applyOrchestrateSuccess(shell, data, fullUserMessage);
-      if (!ok) {
-        BusyController.end({ reason: 'error' });
-        attachRetry(shell, '服务暂时不可用，请稍后重试。');
-        return true;
-      }
-      BusyController.end({ reason: 'success' });
-      return true;
+      const outcome = await consumeOrchestrateResponse(shell, resp);
+      return outcome ? outcome.handled !== false : true;
     } catch (err) {
       if (err && (err.name === 'AbortError' || err.code === 20)) {
+        settleOrchestrateLiveStrip(shell && shell.flowSlot);
         return true;
       }
       console.warn('orchestrate failed; showing retry:', err);
@@ -4873,6 +5014,129 @@ function kindBadgeClass(kind) {
   return '';
 }
 
+function liveFlowBadgeLabel(kind) {
+  const k = String(kind || '').toLowerCase();
+  if (k === 'kb' || k === 'knowledge') return '知识库';
+  if (k === 'external') return '外源';
+  if (k === 'plan') return '计划';
+  if (k === 'skill') return '技能';
+  if (k === 'mcp') return 'MCP';
+  if (k === 'tool') return '工具';
+  if (k === 'agent') return 'Agent';
+  return String(kind || 'step');
+}
+
+function renderOrchestrateLiveStrip(containerEl, flow, opts) {
+  if (!containerEl) return;
+  opts = opts || {};
+  const collapsed = !!opts.collapsed;
+  const waiting = !!opts.waiting;
+  const limit = typeof opts.limit === 'number' ? opts.limit : 5;
+  const flowArr = Array.isArray(flow) ? flow : [];
+  containerEl._liveStripFlow = flowArr;
+  if (containerEl.classList && containerEl.classList.add) {
+    containerEl.classList.add('orchestrate-process-panel');
+  } else {
+    containerEl.className = ((containerEl.className || '') + ' orchestrate-process-panel').trim();
+  }
+
+  if (!flowArr.length && !waiting) {
+    containerEl.hidden = true;
+    containerEl.innerHTML = '';
+    containerEl._liveStripCollapsed = false;
+    return;
+  }
+
+  containerEl.hidden = false;
+  containerEl.setAttribute('aria-live', 'polite');
+  containerEl.innerHTML = '';
+  containerEl._liveStripCollapsed = collapsed;
+  if (containerEl.classList) {
+    if (collapsed) containerEl.classList.add('is-collapsed');
+    else containerEl.classList.remove('is-collapsed');
+  }
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'orchestrate-process-toggle';
+  toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  const chevron = document.createElement('span');
+  chevron.className = 'orchestrate-process-chevron';
+  chevron.setAttribute('aria-hidden', 'true');
+  chevron.textContent = collapsed ? '▸' : '▾';
+  const title = document.createElement('span');
+  title.className = 'orchestrate-process-title';
+  let titleText = '执行过程';
+  if (flowArr.length) {
+    titleText += ' · ' + flowArr.length + ' 步';
+  }
+  if (collapsed && flowArr.length) {
+    titleText += '（点击展开）';
+  } else if (!collapsed && flowArr.length) {
+    titleText += '（点击收起）';
+  }
+  title.textContent = titleText;
+  toggle.appendChild(chevron);
+  toggle.appendChild(title);
+  toggle.addEventListener('click', function () {
+    renderOrchestrateLiveStrip(containerEl, containerEl._liveStripFlow || flowArr, {
+      collapsed: !containerEl._liveStripCollapsed,
+      waiting: waiting && !(containerEl._liveStripFlow || flowArr).length,
+      limit: limit,
+    });
+  });
+  containerEl.appendChild(toggle);
+
+  if (collapsed) {
+    return;
+  }
+
+  if (!flowArr.length && waiting) {
+    const wait = document.createElement('div');
+    wait.className = 'orchestrate-process-waiting';
+    wait.textContent = '正在准备执行步骤…';
+    containerEl.appendChild(wait);
+    return;
+  }
+
+  const recentFn = typeof liveFlowRecent === 'function' ? liveFlowRecent : null;
+  const items = recentFn ? recentFn(flowArr, limit) : flowArr.slice(Math.max(0, flowArr.length - limit));
+  const strip = document.createElement('div');
+  strip.className = 'orchestrate-live-strip';
+
+  items.forEach(function (item) {
+    const row = document.createElement('div');
+    row.className = 'orchestrate-live-strip-item';
+    const status = String((item && item.status) || '').toLowerCase();
+    if (status === 'running' || status === 'current') {
+      const spinner = document.createElement('span');
+      spinner.className = 'orchestrate-live-strip-spinner';
+      spinner.setAttribute('aria-hidden', 'true');
+      row.appendChild(spinner);
+    }
+    const kind = (item && item.kind) || 'step';
+    const badge = document.createElement('span');
+    badge.className = 'orchestrate-wb-badge ' + kindBadgeClass(kind);
+    badge.textContent = liveFlowBadgeLabel(kind);
+    row.appendChild(badge);
+    const nameEl = document.createElement('span');
+    nameEl.className = 'orchestrate-live-strip-name';
+    nameEl.textContent = (item && (item.name || item.id)) || kind;
+    row.appendChild(nameEl);
+    strip.appendChild(row);
+  });
+
+  containerEl.appendChild(strip);
+}
+
+function settleOrchestrateLiveStrip(containerEl) {
+  if (!containerEl) return;
+  const flow = containerEl._liveStripFlow;
+  if (Array.isArray(flow) && flow.length) {
+    renderOrchestrateLiveStrip(containerEl, flow, { collapsed: true });
+  }
+}
+
 function orchestrateToolMeta(tool) {
   const t = String(tool || '').trim();
   const map = {
@@ -4903,7 +5167,8 @@ function buildBusyStagesFromOrchestrate(data) {
     flow.forEach(function (item, i) {
       if (!item || typeof item !== 'object') return;
       const kind = String(item.kind || '').toLowerCase();
-      if (kind === 'plan_step' || kind === 'plan') return;
+      // plan_step 过细；plan 要保留，否则首段长时间只有占位「处理中」
+      if (kind === 'plan_step') return;
       const st = String(item.status || '').toLowerCase();
       let status = 'todo';
       if (st === 'done') status = 'done';
@@ -5064,6 +5329,8 @@ const BusyController = (function () {
     if (el) {
       if (reason === 'abort') {
         removeBusyStages(el);
+        const flowSlot = el.querySelector(':scope > .orchestrate-flow-slot');
+        if (flowSlot) settleOrchestrateLiveStrip(flowSlot);
         const note = document.createElement('div');
         note.className = 'busy-aborted-note';
         note.textContent = '已停止生成';
@@ -5145,7 +5412,6 @@ function buildWorkbenchTimeline(view) {
     if (!item || typeof item !== 'object') return;
     const kind = String(item.kind || '').toLowerCase();
     if (kind === 'plan_step' || kind === 'plan') return;
-    if (item.status === 'running') return;
     const excerpt = timelineExcerptFromFlow(item, view);
     const row = {
       kind: kind || 'step',
@@ -5167,7 +5433,7 @@ function renderOrchestrateWorkbench() {
     ? orchestrateTurnViews.get(selectedOrchestrateTurnId)
     : null;
   if (!view) {
-    body.innerHTML = '<p class="orchestrate-workbench-empty">本轮无编排过程</p>';
+    body.innerHTML = '<p class="orchestrate-workbench-empty">本轮暂无过程记录</p>';
     return;
   }
 
@@ -5318,30 +5584,11 @@ function toggleOrchestrateWorkbenchDrawer() {
 }
 
 function attachOrchestrateTurnTab(shell, turnId) {
-  if (!shell || !shell.content || !turnId) return;
-  let tab = shell.content.querySelector('.orchestrate-turn-tab, .orchestrate-turn-badge');
-  if (!tab) {
-    tab = document.createElement('button');
-    tab.type = 'button';
-    shell.content.appendChild(tab);
-  }
-  tab.className = 'orchestrate-turn-tab';
-  tab.textContent = '编排';
-  tab.setAttribute('aria-pressed', selectedOrchestrateTurnId === turnId && isOrchestrateWorkbenchOpen() ? 'true' : 'false');
-  tab.onclick = function (e) {
-    e.preventDefault();
-    e.stopPropagation();
-    const panel = elements.orchestrateWorkbench || document.getElementById('orchestrateWorkbench');
-    const open = panel && panel.classList.contains('is-open');
-    if (open && selectedOrchestrateTurnId === turnId) {
-      closeOrchestrateWorkbenchDrawer();
-      tab.setAttribute('aria-pressed', 'false');
-      return;
-    }
-    selectOrchestrateTurn(turnId, { openDrawer: true });
-  };
-  // 保证在 cite-list 之后：再 append 一次移到末尾
-  shell.content.appendChild(tab);
+  // 气泡底 Tab 已废弃：过程入口仅为顶端「执行过程」面板。清理历史轮次残留 Tab。
+  if (!shell || !shell.content) return;
+  shell.content.querySelectorAll('.orchestrate-turn-tab, .orchestrate-turn-badge').forEach(function (el) {
+    el.remove();
+  });
 }
 
 function attachOrchestrateTurnBadge(shell, turnId) {
@@ -5356,15 +5603,12 @@ function registerOrchestrateTurn(shell, data) {
   }
   const view = buildOrchestrateTurnView(turnId, data || {});
   orchestrateTurnViews.set(turnId, view);
-  if (shell && shell.flowSlot) {
-    shell.flowSlot.hidden = true;
-    shell.flowSlot.innerHTML = '';
-  }
+  // Keep orchestrate-flow-slot for settled live strip; only clear plan slot.
   if (shell && shell.planSlot) {
     shell.planSlot.hidden = true;
     shell.planSlot.innerHTML = '';
   }
-  // Tab 在引用渲染后再挂（applyOrchestrateSuccess）
+  // Tab 已废弃；顶端过程面板保留。仅刷新工作台缓存视图。
   selectOrchestrateTurn(turnId); // 无 openDrawer
   return turnId;
 }
@@ -5415,6 +5659,212 @@ function normalizeCitationsList(dataOrList) {
   return (fromNested.length ? fromNested : top).filter(function (c) {
     return c && typeof c === 'object';
   });
+}
+
+function partitionCitations(citations) {
+  const list = normalizeCitationsList(citations);
+  const laws = [];
+  const cases = [];
+  list.forEach(function (c) {
+    if (!c || typeof c !== 'object') return;
+    if (String(c.doc_type || '').toLowerCase() === 'case') cases.push(c);
+    else laws.push(c);
+  });
+  return { laws: laws, cases: cases };
+}
+
+function formatRelatedMaterialsTabLabel(parts) {
+  const nLaw = (parts && parts.laws && parts.laws.length) || 0;
+  const nCase = (parts && parts.cases && parts.cases.length) || 0;
+  return '已阅读' + nLaw + '条法规，' + nCase + '个案例';
+}
+
+function defaultRelatedMaterialsSegment(parts) {
+  if (parts && parts.laws && parts.laws.length) return 'law';
+  return 'case';
+}
+
+let relatedMaterialsSourceId = null;
+let relatedMaterialsParts = { laws: [], cases: [] };
+let relatedMaterialsSegment = 'law';
+
+function isRelatedMaterialsOpen() {
+  const area = document.querySelector('.chat-area');
+  return !!(area && area.classList.contains('is-related-open'));
+}
+
+function renderRelatedMaterialsBody() {
+  const body = (elements && elements.relatedMaterialsBody) || document.getElementById('relatedMaterialsBody');
+  if (!body) return;
+  const list = relatedMaterialsSegment === 'case' ? relatedMaterialsParts.cases : relatedMaterialsParts.laws;
+  body.innerHTML = '';
+  if (!list || !list.length) {
+    const empty = document.createElement('p');
+    empty.className = 'related-materials-empty';
+    empty.textContent = relatedMaterialsSegment === 'case' ? '暂无案例' : '暂无法规';
+    body.appendChild(empty);
+    return;
+  }
+  list.forEach(function (c, i) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'related-materials-item';
+    const title = (c.title || '文献').trim() || '文献';
+    const article = (c.article || '').trim();
+    const head = article ? title + ' ' + article : title;
+    const snippet = (c.snippet || '').trim();
+    btn.innerHTML =
+      '<span class="related-materials-item-index">' +
+      (i + 1) +
+      '</span><span class="related-materials-item-main"><div class="related-materials-item-title"></div><div class="related-materials-item-snippet"></div></span>';
+    btn.querySelector('.related-materials-item-title').textContent = head;
+    btn.querySelector('.related-materials-item-snippet').textContent = snippet;
+    if (!c.file_id) {
+      btn.disabled = true;
+      btn.title = '未关联源文件';
+    } else {
+      btn.onclick = function () {
+        openCitationPreview(c);
+      };
+    }
+    body.appendChild(btn);
+  });
+}
+
+function syncRelatedMaterialsSegmentUi() {
+  const root = (elements && elements.relatedMaterials) || document.getElementById('relatedMaterials');
+  if (!root) return;
+  root.querySelectorAll('.related-materials-segment').forEach(function (btn) {
+    const on = btn.getAttribute('data-segment') === relatedMaterialsSegment;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+}
+
+function openRelatedMaterials(sourceId, citations) {
+  relatedMaterialsSourceId = sourceId || null;
+  relatedMaterialsParts = partitionCitations(citations);
+  relatedMaterialsSegment = defaultRelatedMaterialsSegment(relatedMaterialsParts);
+  const panel = (elements && elements.relatedMaterials) || document.getElementById('relatedMaterials');
+  const backdrop = (elements && elements.relatedMaterialsBackdrop) || document.getElementById('relatedMaterialsBackdrop');
+  const area = document.querySelector('.chat-area');
+  if (panel) {
+    panel.hidden = false;
+  }
+  if (area) area.classList.add('is-related-open');
+  if (backdrop) {
+    if (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) {
+      backdrop.hidden = false;
+    } else {
+      backdrop.hidden = true;
+    }
+  }
+  syncRelatedMaterialsSegmentUi();
+  renderRelatedMaterialsBody();
+  document.querySelectorAll('.related-materials-tab').forEach(function (tab) {
+    const on = tab.getAttribute('data-cite-source-id') === relatedMaterialsSourceId;
+    tab.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+function closeRelatedMaterials() {
+  relatedMaterialsSourceId = null;
+  const panel = (elements && elements.relatedMaterials) || document.getElementById('relatedMaterials');
+  const backdrop = (elements && elements.relatedMaterialsBackdrop) || document.getElementById('relatedMaterialsBackdrop');
+  const area = document.querySelector('.chat-area');
+  if (panel) panel.hidden = true;
+  if (area) area.classList.remove('is-related-open');
+  if (backdrop) backdrop.hidden = true;
+  document.querySelectorAll('.related-materials-tab').forEach(function (tab) {
+    tab.setAttribute('aria-pressed', 'false');
+  });
+}
+
+function clearRelatedMaterialsState() {
+  closeRelatedMaterials();
+  relatedMaterialsParts = { laws: [], cases: [] };
+}
+
+function toggleRelatedMaterialsFromTab(sourceId, citations) {
+  if (isRelatedMaterialsOpen() && relatedMaterialsSourceId === sourceId) {
+    closeRelatedMaterials();
+    return;
+  }
+  openRelatedMaterials(sourceId, citations);
+}
+
+function ensureCiteSourceId(messageEl) {
+  if (!messageEl) return null;
+  let id = messageEl.getAttribute('data-cite-source-id');
+  if (!id) {
+    id = messageEl.getAttribute('data-turn-id') || ('cite-src-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+    messageEl.setAttribute('data-cite-source-id', id);
+  }
+  return id;
+}
+
+function appendRelatedMaterialsTab(messageEl, citations) {
+  if (!messageEl) return null;
+  const parts = partitionCitations(citations);
+  if (!parts.laws.length && !parts.cases.length) {
+    const old = messageEl.querySelector('.related-materials-tab');
+    if (old) old.remove();
+    return null;
+  }
+  const sourceId = ensureCiteSourceId(messageEl);
+  let tab = messageEl.querySelector('.related-materials-tab');
+  if (!tab) {
+    tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'related-materials-tab';
+    tab.setAttribute('aria-pressed', 'false');
+  }
+  // Always reposition so a later call (after renderExternalSearchHint) lands after the hint
+  const host =
+    messageEl.querySelector('.message-content') ||
+    messageEl.querySelector('.conclusion-content') ||
+    messageEl;
+  const actions = host.querySelector('.assistant-msg-actions');
+  if (actions) host.insertBefore(tab, actions);
+  else host.appendChild(tab);
+  tab.setAttribute('data-cite-source-id', sourceId);
+  tab.textContent = formatRelatedMaterialsTabLabel(parts) + ' >';
+  tab.onclick = function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    toggleRelatedMaterialsFromTab(sourceId, citations);
+  };
+  return tab;
+}
+
+function initRelatedMaterialsUi() {
+  const closeBtn = (elements && elements.relatedMaterialsClose) || document.getElementById('relatedMaterialsClose');
+  const backdrop = (elements && elements.relatedMaterialsBackdrop) || document.getElementById('relatedMaterialsBackdrop');
+  const panel = (elements && elements.relatedMaterials) || document.getElementById('relatedMaterials');
+  if (closeBtn && !closeBtn._rmBound) {
+    closeBtn._rmBound = true;
+    closeBtn.addEventListener('click', closeRelatedMaterials);
+  }
+  if (backdrop && !backdrop._rmBound) {
+    backdrop._rmBound = true;
+    backdrop.addEventListener('click', closeRelatedMaterials);
+  }
+  if (panel && !panel._rmSegBound) {
+    panel._rmSegBound = true;
+    panel.querySelectorAll('.related-materials-segment').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        relatedMaterialsSegment = btn.getAttribute('data-segment') === 'case' ? 'case' : 'law';
+        syncRelatedMaterialsSegmentUi();
+        renderRelatedMaterialsBody();
+      });
+    });
+  }
+  if (!window._rmEscBound) {
+    window._rmEscBound = true;
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isRelatedMaterialsOpen()) closeRelatedMaterials();
+    });
+  }
 }
 
 function openCitationPreview(c) {
@@ -5623,84 +6073,165 @@ function renderAssistantAnswerWithCitations(answerEl, plainText, citations, list
       bindInlineCitationClicks(answerEl, list);
     }
   }
-  const host = listHost || (answerEl && answerEl.parentElement) || null;
-  if (host) renderCitationList(host, list);
-}
-
-function paintOrchestrateFlow(slot, flow, visibleCount, runningIndex) {
-  if (!slot) return;
-  slot.innerHTML = '';
-  slot.appendChild(renderCapabilityFlow(flow, {
-    visibleCount: visibleCount,
-    runningIndex: runningIndex
-  }));
-}
-
-function sleepMs(ms) {
-  return new Promise(function (resolve) { setTimeout(resolve, ms); });
-}
-
-async function consumeOrchestrateSSE(resp, onStep) {
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  let result = null;
-  while (true) {
-    const read = await reader.read();
-    if (read.done) break;
-    buf += decoder.decode(read.value, { stream: true });
-    const chunks = buf.split('\n\n');
-    buf = chunks.pop() || '';
-    chunks.forEach(function (chunk) {
-      const lines = chunk.split('\n');
-      let payload = '';
-      lines.forEach(function (line) {
-        if (line.indexOf('data:') === 0) {
-          payload += line.replace(/^data:\s?/, '');
-        }
-      });
-      if (!payload) return;
-      try {
-        const msg = JSON.parse(payload);
-        if (msg.type === 'step' && typeof onStep === 'function') onStep(msg);
-        if (msg.type === 'done') result = msg.result;
-      } catch (e) {
-        console.warn('orchestrate SSE chunk parse skipped', e);
-      }
-    });
-  }
-  if (buf.trim()) {
-    try {
-      const leftover = buf.split('\n').filter(function (line) {
-        return line.indexOf('data:') === 0;
-      }).map(function (line) {
-        return line.replace(/^data:\s?/, '');
-      }).join('');
-      if (leftover) {
-        const msg = JSON.parse(leftover);
-        if (msg.type === 'done') result = msg.result;
-      }
-    } catch (e) {}
-  }
-  return result;
-}
-
-async function playOrchestrateFlow(slot, flow) {
-  if (!slot || !flow || !flow.length) return;
-  for (let i = 0; i < flow.length; i++) {
-    paintOrchestrateFlow(slot, flow, i + 1, i);
-    if (elements.chatMessages) {
-      elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
-    }
-    await sleepMs(320);
-  }
-  paintOrchestrateFlow(slot, flow, flow.length, -1);
+  // Spec: do not render inline .cite-list
+  const msg =
+    (listHost && listHost.closest && listHost.closest('.message.assistant')) ||
+    (answerEl && answerEl.closest && answerEl.closest('.message.assistant')) ||
+    null;
+  if (msg) appendRelatedMaterialsTab(msg, list);
 }
 
 function appendCapabilityTrace(host, caps) {
   if (!host) return;
   const bar = renderCapabilityTrace(caps);
   if (bar) host.appendChild(bar);
+}
+
+function getAssistantMessagePlainText(messageEl) {
+  if (!messageEl) return '';
+  const answer =
+    messageEl.querySelector('.orchestrate-answer') ||
+    messageEl.querySelector('.conclusion-content') ||
+    messageEl.querySelector('.message-content');
+  if (!answer) return '';
+  const clone = answer.cloneNode(true);
+  clone.querySelectorAll('.cite-list, .related-materials-tab, .assistant-msg-actions, .external-search-hint, .orchestrate-process-panel, .orchestrate-flow-slot, .orchestrate-plan-slot, .capability-trace').forEach(function (n) {
+    n.remove();
+  });
+  return (clone.innerText || clone.textContent || '').trim();
+}
+
+function appendAssistantMessageActions(messageEl) {
+  if (!messageEl || messageEl.querySelector('.assistant-msg-actions')) return null;
+  // Skip pure loading / tool-invocation chrome without answer body
+  if (
+    messageEl.classList.contains('loading-message') ||
+    messageEl.classList.contains('tool-invocation-message')
+  ) {
+    return null;
+  }
+  // Prefer bottom of message body bubble when present
+  const host =
+    messageEl.querySelector('.message-content') ||
+    messageEl.querySelector('.conclusion-content') ||
+    messageEl;
+  const bar = document.createElement('div');
+  bar.className = 'assistant-msg-actions';
+  bar.setAttribute('role', 'toolbar');
+  bar.setAttribute('aria-label', '消息操作');
+
+  function makeBtn(action, label, svgHtml) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'assistant-msg-action-btn';
+    btn.setAttribute('data-action', action);
+    btn.setAttribute('aria-label', label);
+    if (action !== 'copy') btn.setAttribute('aria-pressed', 'false');
+    btn.title = label;
+    btn.innerHTML = svgHtml;
+    return btn;
+  }
+
+  const likeSvg =
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/><path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
+  const dislikeSvg =
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z"/><path d="M17 2h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"/></svg>';
+  const copySvg =
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+  const likeBtn = makeBtn('like', '点赞', likeSvg);
+  const dislikeBtn = makeBtn('dislike', '反点赞', dislikeSvg);
+  const copyBtn = makeBtn('copy', '复制', copySvg);
+  bar.appendChild(likeBtn);
+  bar.appendChild(dislikeBtn);
+  bar.appendChild(copyBtn);
+
+  likeBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const on = likeBtn.classList.toggle('is-active');
+    likeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) {
+      dislikeBtn.classList.remove('is-active');
+      dislikeBtn.setAttribute('aria-pressed', 'false');
+    }
+  });
+  dislikeBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const on = dislikeBtn.classList.toggle('is-active');
+    dislikeBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) {
+      likeBtn.classList.remove('is-active');
+      likeBtn.setAttribute('aria-pressed', 'false');
+    }
+  });
+  copyBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const text = getAssistantMessagePlainText(messageEl);
+    if (!text) return;
+    const done = function () {
+      copyBtn.classList.add('is-copied');
+      copyBtn.title = '已复制';
+      showPageToast('已复制成功', 2000);
+      setTimeout(function () {
+        copyBtn.classList.remove('is-copied');
+        copyBtn.title = '复制';
+      }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function () {
+        fallbackCopyText(text) && done();
+      });
+    } else if (fallbackCopyText(text)) {
+      done();
+    }
+  });
+
+  host.appendChild(bar);
+  return bar;
+}
+
+function fallbackCopyText(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (err) {
+    return false;
+  }
+}
+
+function showPageToast(message, durationMs) {
+  const text = String(message || '').trim();
+  if (!text) return;
+  const ms = typeof durationMs === 'number' ? durationMs : 2000;
+  document.querySelectorAll('.page-toast').forEach(function (el) {
+    el.remove();
+  });
+  const toast = document.createElement('div');
+  toast.className = 'page-toast';
+  toast.setAttribute('role', 'status');
+  toast.setAttribute('aria-live', 'polite');
+  toast.textContent = text;
+  document.body.appendChild(toast);
+  requestAnimationFrame(function () {
+    toast.classList.add('is-visible');
+  });
+  setTimeout(function () {
+    toast.classList.remove('is-visible');
+    setTimeout(function () {
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+    }, 220);
+  }, ms);
 }
 
 function addMessage(role, content, type = 'normal', capabilities = null, citations = null) {
@@ -5730,6 +6261,12 @@ function addMessage(role, content, type = 'normal', capabilities = null, citatio
   messageDiv.appendChild(contentDiv);
   if (role === 'assistant' && !(capabilities && capabilities.flow && capabilities.flow.length)) {
     appendCapabilityTrace(messageDiv, capabilities);
+  }
+  if (role === 'assistant' && citeList.length) {
+    appendRelatedMaterialsTab(messageDiv, citeList);
+  }
+  if (role === 'assistant' && type !== 'error') {
+    appendAssistantMessageActions(messageDiv);
   }
   
   elements.chatMessages.appendChild(messageDiv);
@@ -6764,12 +7301,12 @@ function addCombinedMessage(thinkingContent, conclusionContent, capabilities, ci
     const conclusionDiv = document.createElement('div');
     conclusionDiv.className = 'conclusion-content';
     const citeList = normalizeCitationsList(citations);
+    messageWrapper.appendChild(conclusionDiv);
     if (citeList.length) {
       renderAssistantAnswerWithCitations(conclusionDiv, conclusionContent, citeList, messageWrapper);
     } else {
       conclusionDiv.textContent = conclusionContent;
     }
-    messageWrapper.appendChild(conclusionDiv);
     console.log('✅ 结论内容已添加到消息');
   } else {
     console.log('⚠️ 结论内容为空，跳过');
@@ -6785,6 +7322,11 @@ function addCombinedMessage(thinkingContent, conclusionContent, capabilities, ci
 
   const caps = capabilities === undefined ? consumeTurnCapabilities() : capabilities;
   appendCapabilityTrace(messageWrapper, caps);
+  const citeListForTab = normalizeCitationsList(citations);
+  if (citeListForTab.length) {
+    appendRelatedMaterialsTab(messageWrapper, citeListForTab);
+  }
+  appendAssistantMessageActions(messageWrapper);
   
   elements.chatMessages.appendChild(messageWrapper);
   elements.chatMessages.scrollTop = elements.chatMessages.scrollHeight;
@@ -7185,6 +7727,7 @@ async function loadSessionList() {
               await createNewSession();
               elements.chatMessages.innerHTML = '';
               clearOrchestrateWorkbenchState();
+              clearRelatedMaterialsState();
             }
             
             // 刷新会话列表
@@ -7999,6 +8542,7 @@ async function deleteSession(sessionId) {
       await createNewSession();
       elements.chatMessages.innerHTML = '';
       clearOrchestrateWorkbenchState();
+      clearRelatedMaterialsState();
     }
     
     // 刷新会话列表
@@ -8105,6 +8649,7 @@ async function loadSession(sessionId) {
     
   elements.chatMessages.innerHTML = '';
   clearOrchestrateWorkbenchState();
+  clearRelatedMaterialsState();
   console.log('恢复对话历史，消息数量:', currentSession.conversationHistory.length);
   currentSession.conversationHistory.forEach(restoreHistoryMessage);
   await restoreGeneratedFilesForSession(currentSession.sessionId, currentSession.conversationHistory);
@@ -8118,6 +8663,7 @@ async function loadSession(sessionId) {
       currentSession = sessionId;
       elements.chatMessages.innerHTML = '';
       clearOrchestrateWorkbenchState();
+      clearRelatedMaterialsState();
       // 使用相同的逻辑恢复对话历史
       currentSession.conversationHistory.forEach(restoreHistoryMessage);
       restoreGeneratedFilesForSession(currentSession.sessionId, currentSession.conversationHistory).catch(() => {});
@@ -8574,6 +9120,7 @@ function bindEvents() {
     await createNewSession();
     elements.chatMessages.innerHTML = '';
     clearOrchestrateWorkbenchState();
+    clearRelatedMaterialsState();
     await loadSessionList();
   };
   
@@ -8592,6 +9139,7 @@ function bindEvents() {
           await createNewSession();
           elements.chatMessages.innerHTML = '';
           clearOrchestrateWorkbenchState();
+          clearRelatedMaterialsState();
           await loadSessionList();
         } else {
           throw new Error('删除会话失败');
@@ -8604,6 +9152,7 @@ function bindEvents() {
         await createNewSession();
       elements.chatMessages.innerHTML = '';
         clearOrchestrateWorkbenchState();
+        clearRelatedMaterialsState();
         await loadSessionList();
     }
   };

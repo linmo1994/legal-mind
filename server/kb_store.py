@@ -128,6 +128,39 @@ class KbStore:
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
+    def find_documents_by_title(
+        self, *, doc_type: str, title: str, limit: int = 10
+    ) -> list[dict]:
+        self._validate_doc_type(doc_type)
+        q = (title or "").strip()
+        if not q:
+            return []
+        with self._conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM kb_documents
+                WHERE doc_type = ? AND status != 'deleted'
+                  AND (
+                    trim(title) = ?
+                    OR trim(title) LIKE '%' || ? || '%'
+                    OR ? LIKE '%' || trim(title) || '%'
+                  )
+                  AND length(trim(title)) > 0
+                ORDER BY CASE WHEN trim(title) = ? THEN 0 ELSE 1 END,
+                         updated_at DESC
+                LIMIT ?
+                """,
+                (doc_type, q, q, q, q, max(1, int(limit))),
+            ).fetchall()
+        docs = [self._row_to_dict(r) for r in rows]
+        docs.sort(
+            key=lambda d: (
+                0 if (d.get("title") or "").strip() == q else 1,
+                -(float(d.get("updated_at") or 0)),
+            )
+        )
+        return docs[: max(1, int(limit))]
+
     def count_documents(self, *, doc_type: str | None = None) -> int:
         with self._conn() as conn:
             if doc_type is None:
