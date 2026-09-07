@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from typing import Any, List, Optional, Tuple
 
+MATCH_SCORE_THRESHOLD = 40
+
+_DOC_TYPE_HINTS = (
+    ("起诉状", "起诉状"),
+    ("答辩状", "答辩状"),
+    ("申请书", "申请书"),
+    ("判决书", "判决书"),
+    ("调解书", "调解书"),
+    ("协议书", "协议书"),
+)
+
 
 def _display_name(doc: dict) -> str:
     meta = doc.get("meta") or {}
@@ -58,6 +69,58 @@ def _score_match(query: str, name: str) -> int:
             if piece in n:
                 score += size
     return score
+
+
+def _infer_doc_type_from_query(query: str) -> str:
+    q = query or ""
+    for needle, label in _DOC_TYPE_HINTS:
+        if needle in q:
+            return label
+    return ""
+
+
+def score_template_candidate(query: str, doc: dict) -> int:
+    meta = doc.get("meta") or {}
+    name = _display_name(doc)
+    score = _score_match(query, name)
+    hint = _infer_doc_type_from_query(query)
+    dtype = (meta.get("document_type") or "").strip()
+    if hint and dtype and hint == dtype:
+        score += 25
+    return score
+
+
+def match_template(kb_store, query: str, *, limit: int = 200) -> Optional[dict]:
+    """Return best usable template hit above MATCH_SCORE_THRESHOLD, or None.
+
+    Hit shape: {name, score, document_id, file_id, meta}
+    """
+    if kb_store is None:
+        return None
+    q = (query or "").strip()
+    if not q:
+        return None
+    docs = [
+        d
+        for d in kb_store.list_documents(doc_type="template", limit=limit, offset=0)
+        if _is_usable(d)
+    ]
+    best = None
+    best_score = 0
+    for doc in docs:
+        score = score_template_candidate(q, doc)
+        if score > best_score:
+            best_score = score
+            best = doc
+    if best is None or best_score < MATCH_SCORE_THRESHOLD:
+        return None
+    return {
+        "name": _display_name(best),
+        "score": best_score,
+        "document_id": best.get("id"),
+        "file_id": best.get("file_id"),
+        "meta": dict(best.get("meta") or {}),
+    }
 
 
 def find_template_doc(kb_store, template_name: str) -> Optional[dict]:
