@@ -864,6 +864,98 @@ class TestOrchestrator(unittest.TestCase):
         self.assertEqual(extra.get("past_steps"), resume_out["past_steps"])
         self.assertEqual(extra.get("status"), "awaiting_user")
 
+    def test_handle_orchestrate_registers_artifact_when_case_bound(self):
+        from unittest.mock import MagicMock, patch
+
+        from http_api_extra import handle_orchestrate
+
+        store = MagicMock()
+        approval_store = MagicMock()
+        approval_store.create_artifact.return_value = {
+            "id": 42,
+            "approval_status": "draft",
+        }
+        mcp = MagicMock()
+        mcp.rbac_store = store
+        mcp.rbac_api = None
+        mcp.file_service = MagicMock()
+        mcp.session_service = None
+        mcp.approval_store = approval_store
+        mcp._handle_resource_read.return_value = {"result": {"contents": [{"text": ""}]}}
+
+        artifact = {
+            "file_id": "fid-1",
+            "title": "民间借贷起诉状",
+            "filename": "起诉状.docx",
+        }
+
+        def fake_run(**kwargs):
+            return {"visible_text": "ok", "artifact": artifact}
+
+        with patch("http_api_extra.run_orchestrate", side_effect=fake_run), patch(
+            "http_api_extra.skill_service"
+        ) as skill_svc, patch(
+            "http_api_extra.make_retrieve_fn", return_value=lambda q: {}
+        ), patch("case_materials.build_case_material_context", return_value=""):
+            skill_svc.return_value.match.return_value = []
+            result = handle_orchestrate(
+                mcp,
+                {
+                    "user_text": "写起诉状",
+                    "case_id": 7,
+                    "_auth_user_id": 10,
+                },
+            )
+
+        approval_store.create_artifact.assert_called_once_with(
+            case_id=7,
+            file_id="fid-1",
+            title="民间借贷起诉状",
+            doc_type="民间借贷起诉状",
+            created_by=10,
+            source="ai_draft_doc",
+        )
+        approval_store.write_audit.assert_called_once_with(
+            actor_user_id=10,
+            action="artifact_created",
+            object_type="doc_artifact",
+            object_id=42,
+            case_id=7,
+            detail={"file_id": "fid-1"},
+        )
+        art = result.get("artifact") or {}
+        self.assertEqual(art.get("artifact_id"), 42)
+        self.assertEqual(art.get("approval_status"), "draft")
+
+    def test_handle_orchestrate_skips_artifact_registration_without_case(self):
+        from unittest.mock import MagicMock, patch
+
+        from http_api_extra import handle_orchestrate
+
+        approval_store = MagicMock()
+        mcp = MagicMock()
+        mcp.rbac_store = None
+        mcp.rbac_api = None
+        mcp.file_service = None
+        mcp.session_service = None
+        mcp.approval_store = approval_store
+        mcp._handle_resource_read.return_value = {"result": {"contents": [{"text": ""}]}}
+
+        def fake_run(**kwargs):
+            return {
+                "visible_text": "ok",
+                "artifact": {"file_id": "fid-1", "title": "起诉状"},
+            }
+
+        with patch("http_api_extra.run_orchestrate", side_effect=fake_run), patch(
+            "http_api_extra.skill_service"
+        ) as skill_svc, patch("http_api_extra.make_retrieve_fn", return_value=lambda q: {}):
+            skill_svc.return_value.match.return_value = []
+            result = handle_orchestrate(mcp, {"user_text": "写起诉状"})
+
+        approval_store.create_artifact.assert_not_called()
+        self.assertNotIn("artifact_id", result.get("artifact") or {})
+
 
 if __name__ == "__main__":
     unittest.main()

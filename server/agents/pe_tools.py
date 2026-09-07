@@ -98,6 +98,7 @@ def _artifact_from_saved_docx(
     title: str,
     preview: str = "",
     preview_tables: Optional[List[List[List[str]]]] = None,
+    case_id: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     file_id = info.get("file_id")
     if not file_id:
@@ -116,6 +117,8 @@ def _artifact_from_saved_docx(
     }
     if preview_tables:
         out["preview_tables"] = preview_tables
+    if case_id not in (None, ""):
+        out["case_id"] = case_id
     return out
 
 
@@ -184,6 +187,7 @@ def _export_docx_artifact(
     body: str,
     file_service: Any,
     session_id: Optional[str] = None,
+    case_id: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     """Same shape as orchestrator doc_writing artifact; None if export unavailable."""
     if not file_service or not (body or "").strip():
@@ -204,7 +208,7 @@ def _export_docx_artifact(
         preview = (body or "").strip()
         if len(preview) > 600:
             preview = preview[:600] + "…"
-        return {
+        out: Dict[str, Any] = {
             "filename": info.get("original_name") or default_filename(title),
             "file_id": file_id,
             "download_url": f"/api/files/{file_id}/download",
@@ -212,6 +216,9 @@ def _export_docx_artifact(
             "title": title,
             "preview": preview,
         }
+        if case_id not in (None, ""):
+            out["case_id"] = case_id
+        return out
     except Exception as exc:
         print(f"[pe_tools] draft_doc docx export failed: {exc}")
         return None
@@ -460,6 +467,7 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
         kb_store = ctx.get("kb_store")
         file_service = ctx.get("file_service")
         session_id = ctx.get("session_id")
+        case_id = ctx.get("case_id")
         hit = None
         if kb_store is not None:
             from kb_template_resolve import match_template
@@ -532,6 +540,7 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
                     title=tmpl_name,
                     preview=preview,
                     preview_tables=structure.get("preview_tables") or None,
+                    case_id=case_id,
                 )
                 return {"observation": _trim(obs), "citations": [], "artifact": artifact}
 
@@ -561,7 +570,9 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
             title = str(args.get("title") or ctx.get("doc_title") or "").strip()
             if not title:
                 title = _infer_draft_title(str(prompt or "") + " " + str(ctx.get("objective") or ""))
-            artifact = _export_docx_artifact(title, body, file_service, session_id=session_id)
+            artifact = _export_docx_artifact(
+                title, body, file_service, session_id=session_id, case_id=case_id
+            )
             obs = f"已套用模版《{tmpl_name}》（非表格填槽）。\n\n{body}"
             return {"observation": _trim(obs), "citations": [], "artifact": artifact}
 
@@ -602,6 +613,7 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
             body,
             file_service,
             session_id=session_id,
+            case_id=case_id,
         )
         observation = body
         # Only prefix when kb_store was present but template match failed (backward compat).

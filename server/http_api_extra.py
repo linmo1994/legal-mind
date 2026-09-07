@@ -611,6 +611,27 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
         )
     finally:
         reset_workflow(token)
+    approval_store = getattr(mcp_server, "approval_store", None)
+    art = result.get("artifact")
+    if art and parsed_case_id is not None and approval_store:
+        row = approval_store.create_artifact(
+            case_id=int(parsed_case_id),
+            file_id=art["file_id"],
+            title=art.get("title") or art.get("filename") or "法律文书",
+            doc_type=art.get("title") or "法律文书",
+            created_by=body.get("_auth_user_id"),
+            source="ai_draft_doc",
+        )
+        art["artifact_id"] = row["id"]
+        art["approval_status"] = row["approval_status"]
+        approval_store.write_audit(
+            actor_user_id=body.get("_auth_user_id"),
+            action="artifact_created",
+            object_type="doc_artifact",
+            object_id=row["id"],
+            case_id=int(parsed_case_id),
+            detail={"file_id": art["file_id"]},
+        )
     saved = False
     session_service = getattr(mcp_server, "session_service", None)
     if session_id and session_service and not result.get("legacy"):

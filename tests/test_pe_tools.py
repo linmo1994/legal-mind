@@ -325,6 +325,25 @@ class TestPeTools(unittest.TestCase):
         self.assertGreater(len(saved["data"]), 20)
         self.assertEqual(saved.get("session_id"), "sess-1")
 
+    def test_draft_doc_artifact_includes_case_id(self):
+        def write_llm(system, user, hist=None):
+            return "民事起诉状\n原告：张三\n此致\n人民法院"
+
+        class FakeFS:
+            def save_file(self, data, filename, session_id=None, description=None):
+                return {"file_id": "fid-case", "original_name": filename}
+
+        out = run_tool(
+            "draft_doc",
+            {"prompt": "生成起诉状"},
+            {
+                "write_llm": write_llm,
+                "file_service": FakeFS(),
+                "case_id": 5,
+            },
+        )
+        self.assertEqual((out.get("artifact") or {}).get("case_id"), 5)
+
     def test_draft_doc_fills_matched_element_template(self):
         doc = Document()
         t1 = doc.add_table(rows=1, cols=1)
