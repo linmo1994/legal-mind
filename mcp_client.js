@@ -4715,7 +4715,34 @@ function addOrchestrateDownload(artifact) {
   const preview = document.createElement('div');
   preview.className = 'generated-doc-preview';
   preview.hidden = true;
-  preview.textContent = artifact.preview || '暂无预览，请下载 Word 查看全文。';
+  const tables = Array.isArray(artifact.preview_tables) ? artifact.preview_tables : [];
+  if (tables.length) {
+    preview.classList.add('has-tables');
+    tables.forEach((grid, ti) => {
+      if (!Array.isArray(grid) || !grid.length) return;
+      const table = document.createElement('table');
+      table.className = 'generated-doc-table';
+      const tbody = document.createElement('tbody');
+      grid.forEach((row) => {
+        const tr = document.createElement('tr');
+        (Array.isArray(row) ? row : [row]).forEach((cell) => {
+          const td = document.createElement('td');
+          td.textContent = cell == null ? '' : String(cell);
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      preview.appendChild(table);
+      if (ti < tables.length - 1) {
+        const gap = document.createElement('div');
+        gap.className = 'generated-doc-table-gap';
+        preview.appendChild(gap);
+      }
+    });
+  } else {
+    preview.textContent = artifact.preview || '暂无预览，请下载 Word 查看全文。';
+  }
 
   const tabs = document.createElement('div');
   tabs.className = 'generated-doc-tabs';

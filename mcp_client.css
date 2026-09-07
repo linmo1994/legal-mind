@@ -774,9 +774,33 @@ body {
   line-height: 1.7;
   color: #374151;
   white-space: pre-wrap;
-  max-height: 220px;
+  max-height: 360px;
   overflow: auto;
   background: #f8fafc;
+}
+
+.generated-doc-preview.has-tables {
+  white-space: normal;
+}
+
+.generated-doc-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.generated-doc-table td {
+  border: 1px solid #d1d5db;
+  padding: 6px 8px;
+  vertical-align: top;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.generated-doc-table-gap {
+  height: 12px;
 }
 
 .generated-doc-tabs {

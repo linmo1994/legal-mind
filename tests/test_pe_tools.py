@@ -394,6 +394,16 @@ class TestPeTools(unittest.TestCase):
         preview = (art.get("preview") or "")
         self.assertIn("张三", preview)
         self.assertNotIn("请下载核阅", preview)
+        tables = art.get("preview_tables") or []
+        self.assertTrue(tables)
+        flat = " ".join(
+            str(c)
+            for grid in tables
+            for row in grid
+            for c in row
+        )
+        self.assertIn("张三", flat)
+        self.assertIn("李四", flat)
 
     def test_draft_doc_save_failure_after_fill(self):
         doc = Document()

@@ -97,6 +97,7 @@ def _artifact_from_saved_docx(
     *,
     title: str,
     preview: str = "",
+    preview_tables: Optional[List[List[List[str]]]] = None,
 ) -> Optional[Dict[str, Any]]:
     file_id = info.get("file_id")
     if not file_id:
@@ -105,7 +106,7 @@ def _artifact_from_saved_docx(
     if len(preview) > 600:
         preview = preview[:600] + "…"
     filename = info.get("original_name") or f"{title}.docx"
-    return {
+    out: Dict[str, Any] = {
         "filename": filename,
         "file_id": file_id,
         "download_url": f"/api/files/{file_id}/download",
@@ -113,12 +114,21 @@ def _artifact_from_saved_docx(
         "title": title,
         "preview": preview,
     }
+    if preview_tables:
+        out["preview_tables"] = preview_tables
+    return out
 
 
-def _preview_text_from_docx_bytes(docx_bytes: bytes, *, limit: int = 600) -> str:
-    """Plain-text preview from a filled/exported docx (paragraphs + table cells)."""
+def _preview_structure_from_docx_bytes(
+    docx_bytes: bytes,
+    *,
+    text_limit: int = 600,
+    max_rows: int = 40,
+) -> Dict[str, Any]:
+    """Extract plain preview text + table grids for HTML rendering in the client."""
+    empty: Dict[str, Any] = {"preview": "", "preview_tables": []}
     if not docx_bytes:
-        return ""
+        return empty
     try:
         import io
 
@@ -126,12 +136,19 @@ def _preview_text_from_docx_bytes(docx_bytes: bytes, *, limit: int = 600) -> str
 
         doc = Document(io.BytesIO(docx_bytes))
         parts: List[str] = []
+        tables_out: List[List[List[str]]] = []
+
         for para in doc.paragraphs:
             t = (para.text or "").strip()
             if t:
                 parts.append(t)
+
         for table in doc.tables:
-            for row in table.rows:
+            grid: List[List[str]] = []
+            for ri, row in enumerate(table.rows):
+                if ri >= max_rows:
+                    grid.append(["…（预览已截断）"])
+                    break
                 seen = set()
                 cells_out: List[str] = []
                 for cell in row.cells:
@@ -140,17 +157,26 @@ def _preview_text_from_docx_bytes(docx_bytes: bytes, *, limit: int = 600) -> str
                         continue
                     seen.add(cid)
                     t = (cell.text or "").strip()
-                    if t:
-                        cells_out.append(t.replace("\n", " "))
+                    if len(t) > 120:
+                        t = t[:119] + "…"
+                    cells_out.append(t)
                 if cells_out:
-                    parts.append(" | ".join(cells_out))
+                    grid.append(cells_out)
+                    parts.append(" | ".join(c.replace("\n", " ") for c in cells_out if c))
+            if grid:
+                tables_out.append(grid)
+
         text = "\n".join(parts).strip()
-        if len(text) > limit:
-            return text[: limit - 1] + "…"
-        return text
+        if len(text) > text_limit:
+            text = text[: text_limit - 1] + "…"
+        return {"preview": text, "preview_tables": tables_out}
     except Exception as exc:
         print(f"[pe_tools] docx preview extract failed: {exc}")
-        return ""
+        return empty
+
+
+def _preview_text_from_docx_bytes(docx_bytes: bytes, *, limit: int = 600) -> str:
+    return str(_preview_structure_from_docx_bytes(docx_bytes, text_limit=limit).get("preview") or "")
 
 
 def _export_docx_artifact(
@@ -499,11 +525,13 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
                 )
                 if filled_summary:
                     obs += f"\n已填要素：{filled_summary}"
-                preview = _preview_text_from_docx_bytes(filled) or obs
+                structure = _preview_structure_from_docx_bytes(filled)
+                preview = structure.get("preview") or obs
                 artifact = _artifact_from_saved_docx(
                     info,
                     title=tmpl_name,
                     preview=preview,
+                    preview_tables=structure.get("preview_tables") or None,
                 )
                 return {"observation": _trim(obs), "citations": [], "artifact": artifact}
 
