@@ -86,7 +86,12 @@ def score_template_candidate(query: str, doc: dict) -> int:
     hint = _infer_doc_type_from_query(query)
     dtype = (meta.get("document_type") or "").strip()
     if hint and dtype and hint == dtype:
+        # Document-type intent alone must clear MATCH_SCORE_THRESHOLD for
+        # queries like「请帮我写一份起诉状」(name overlap alone is often ~7).
         score += 25
+        if hint in name:
+            score += 15
+        score = max(score, MATCH_SCORE_THRESHOLD)
     return score
 
 

@@ -54,6 +54,21 @@ class TestDocxFormFill(unittest.TestCase):
         self.assertNotIn("{", text)
         self.assertNotIn("}", text)
 
+    def test_court_style_inline_name_slot(self):
+        doc = Document()
+        t = doc.add_table(rows=1, cols=2)
+        t.cell(0, 0).text = "原告\n（自然人）"
+        t.cell(0, 1).text = "姓名：\n性别：男□   女□"
+        buf = io.BytesIO()
+        doc.save(buf)
+        raw = buf.getvalue()
+        slots = scan_slots_from_document(Document(io.BytesIO(raw)))
+        self.assertTrue(any(s["key"] == "原告" and s["mode"] == "inline_name" for s in slots))
+        out = fill_docx_bytes(raw, {"原告": "张三"})
+        text = Document(io.BytesIO(out)).tables[0].cell(0, 1).text
+        self.assertIn("姓名：张三", text)
+        self.assertIn("性别", text)
+
 
 class TestElementDict(unittest.TestCase):
     def test_rules_extract_plaintiff_defendant(self):

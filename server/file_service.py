@@ -395,8 +395,21 @@ class FileService:
             if file_type_lower == 'docx' and HAS_DOCX:
                 try:
                     doc = DocxDocument(io.BytesIO(file_data))
-                    paragraphs = [para.text for para in doc.paragraphs]
-                    return '\n'.join(paragraphs)
+                    parts = [para.text for para in doc.paragraphs if (para.text or "").strip()]
+                    # 要素式文书正文主要在表格里；只抽段落会几乎为空。
+                    for table in doc.tables:
+                        for row in table.rows:
+                            seen = set()
+                            for cell in row.cells:
+                                # python-docx 合并单元格会重复出现；按 id 去重
+                                cid = id(cell._tc)
+                                if cid in seen:
+                                    continue
+                                seen.add(cid)
+                                t = (cell.text or "").strip()
+                                if t:
+                                    parts.append(t)
+                    return "\n".join(parts)
                 except Exception as e:
                     print(f"[FileService] DOCX文字提取失败: {e}")
                     return None
@@ -438,24 +451,49 @@ class FileService:
     def get_file_text(self, file_id: str) -> Optional[str]:
         """
         获取文件的文字内容
-        
+
         Args:
             file_id: 文件ID
-            
+
         Returns:
             文件的文字内容，如果不存在返回None
         """
         conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT text_content FROM files WHERE file_id = ?
-        """, (file_id,))
-        
+
+        cursor.execute(
+            """
+            SELECT text_content, file_path, file_type FROM files WHERE file_id = ?
+            """,
+            (file_id,),
+        )
+
         row = cursor.fetchone()
         conn.close()
-        
-        if row and row[0]:
-            return row[0]
-        return None
+
+        if not row:
+            return None
+
+        cached = (row["text_content"] or "").strip() if "text_content" in row.keys() else ""
+        file_path = row["file_path"] if "file_path" in row.keys() else None
+        file_type = (row["file_type"] or "").lower() if "file_type" in row.keys() else ""
+
+        # 旧入库要素式 docx 往往只抽了段落（几乎为空）；有源文件则重抽含表格。
+        needs_refresh = False
+        if file_type == "docx" and file_path and os.path.exists(file_path):
+            if not cached or len(cached) < 80:
+                needs_refresh = True
+
+        if needs_refresh:
+            try:
+                with open(file_path, "rb") as f:
+                    data = f.read()
+                refreshed = self._extract_text(data, file_type or "docx", file_path)
+                if refreshed and refreshed.strip():
+                    return refreshed.strip()
+            except Exception as exc:
+                print(f"[FileService] docx 重抽文字失败: {exc}")
+
+        return cached or None
 

@@ -139,6 +139,13 @@ class TestMatchTemplate(unittest.TestCase):
         self.assertIsNotNone(hit)
         self.assertEqual(hit["meta"].get("document_type"), "起诉状")
 
+    def test_document_type_only_query_matches(self):
+        """「请帮我写一份起诉状」must clear threshold via document_type boost."""
+        hit = match_template(self.kb, "请帮我写一份起诉状")
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit["document_id"], "t1")
+        self.assertGreaterEqual(hit["score"], MATCH_SCORE_THRESHOLD)
+
 
 if __name__ == "__main__":
     unittest.main()

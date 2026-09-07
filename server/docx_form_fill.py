@@ -52,6 +52,30 @@ def _cell_empty(text: str) -> bool:
     return False
 
 
+_PARTY_PREFIXES = ("原告", "被告", "申请人", "被申请人", "第三人")
+_INLINE_NAME_RES = (
+    re.compile(r"(姓名[:：])([^\n]*)"),
+    re.compile(r"(名称[:：])([^\n]*)"),
+)
+
+
+def _party_key_from_left(left: str) -> Optional[str]:
+    """Map court labels like「原告（自然人）」to canonical party keys."""
+    t = left or ""
+    for key in _PARTY_PREFIXES:
+        if t.startswith(key) or key in t[:8]:
+            return key
+    return None
+
+
+def _has_blank_inline_name(text: str) -> bool:
+    for rx in _INLINE_NAME_RES:
+        m = rx.search(text or "")
+        if m and not (m.group(2) or "").strip():
+            return True
+    return False
+
+
 def scan_slots_from_document(doc) -> List[Dict[str, Any]]:
     slots: List[Dict[str, Any]] = []
     seen = set()
@@ -82,9 +106,11 @@ def scan_slots_from_document(doc) -> List[Dict[str, Any]]:
                         )
             # label → right cell (2+ cols)
             if len(cells) >= 2:
-                left = _norm_label(cells[0].text or "")
+                left_raw = cells[0].text or ""
+                left = _norm_label(left_raw)
+                right = cells[1].text or ""
                 key = LABEL_KEYS.get(left)
-                if key and _cell_empty(cells[1].text or ""):
+                if key and _cell_empty(right):
                     sig = ("label_right", ti, ri, 1, key)
                     if sig not in seen:
                         seen.add(sig)
@@ -98,6 +124,24 @@ def scan_slots_from_document(doc) -> List[Dict[str, Any]]:
                                 "label": left,
                             }
                         )
+                else:
+                    # Court 要素式:「原告（自然人）」|「姓名：\n性别：…」
+                    party = _party_key_from_left(left)
+                    if party and _has_blank_inline_name(right):
+                        # One inline slot per party key (prefer first row, usually 自然人).
+                        sig = ("inline_name", party)
+                        if sig not in seen:
+                            seen.add(sig)
+                            slots.append(
+                                {
+                                    "key": party,
+                                    "mode": "inline_name",
+                                    "table_i": ti,
+                                    "row_i": ri,
+                                    "cell_i": 1,
+                                    "label": left,
+                                }
+                            )
     return slots
 
 
@@ -110,6 +154,19 @@ def _set_cell_text(cell, value: str) -> None:
             p.text = ""
     else:
         cell.text = value
+
+
+def _fill_inline_name(cell, value: str) -> None:
+    text = cell.text or ""
+    for rx in _INLINE_NAME_RES:
+        m = rx.search(text)
+        if m and not (m.group(2) or "").strip():
+            start, end = m.span(2)
+            # Keep trailing content after the blank name field.
+            new_text = text[: m.start(1)] + m.group(1) + value + text[end:]
+            _set_cell_text(cell, new_text)
+            return
+    _set_cell_text(cell, value)
 
 
 def fill_document(doc, elements: Dict[str, Any], slots: Optional[List[Dict[str, Any]]] = None):
@@ -147,6 +204,8 @@ def fill_document(doc, elements: Dict[str, Any], slots: Optional[List[Dict[str, 
                         count=1,
                     )
                 _set_cell_text(cell, new_text)
+        elif slot["mode"] == "inline_name":
+            _fill_inline_name(cell, val)
         else:
             _set_cell_text(cell, val)
     return doc
