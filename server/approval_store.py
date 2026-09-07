@@ -168,6 +168,15 @@ class ApprovalStore:
         conn.close()
         return self._enrich_artifact(dict(row)) if row else None
 
+    def get_artifact_by_file_id(self, file_id: str) -> Optional[Dict[str, Any]]:
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT * FROM doc_artifacts WHERE file_id = ? ORDER BY id DESC LIMIT 1",
+            (file_id,),
+        ).fetchone()
+        conn.close()
+        return self._enrich_artifact(dict(row)) if row else None
+
     def list_artifacts_for_case(self, case_id: int) -> List[Dict[str, Any]]:
         conn = self._connect()
         rows = conn.execute(

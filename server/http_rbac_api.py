@@ -783,3 +783,55 @@ class RbacHttpApi:
         out = {"user": user, "case_id": ("*" if case_scope == "all_permitted" else case_id)}
         out["case_scope"] = case_scope
         return _ok(out)
+
+    def _is_director(self, user_id: int) -> bool:
+        return "director" in self.store.list_user_role_codes(user_id)
+
+    def _case_ids_for_file_id(self, file_id: str) -> List[int]:
+        ids: List[int] = []
+        for case in self.store.list_cases():
+            contracts = case.get("contract_file_ids") or []
+            evidence = case.get("evidence_file_ids") or []
+            if file_id in contracts or file_id in evidence:
+                ids.append(int(case["id"]))
+        return ids
+
+    def check_file_download_access(
+        self,
+        authorization: Optional[str],
+        file_id: str,
+        file_info: Optional[Dict[str, Any]],
+        session_service=None,
+    ) -> StatusPayload:
+        """Authorize file preview/download: login required; case artifact/member, uploader, or director."""
+        gated = self.require_user(authorization)
+        if gated[0] != 200:
+            return gated
+        user = gated[1]["user"]
+        if not file_info:
+            return _deny(404, "文件不存在")
+        user_id = int(user["id"])
+        if self._is_director(user_id):
+            return _ok({"user": user})
+
+        approval = self.approval_store
+        if approval:
+            artifact = approval.get_artifact_by_file_id(file_id)
+            if artifact:
+                case_id = int(artifact["case_id"])
+                if self.store.get_case_member(case_id, user_id):
+                    return _ok({"user": user})
+                return _deny(403, "无权访问该文件")
+
+        for case_id in self._case_ids_for_file_id(file_id):
+            if self.store.get_case_member(case_id, user_id):
+                return _ok({"user": user})
+
+        session_id = file_info.get("session_id")
+        if session_id and session_service:
+            session = session_service.get_session(session_id)
+            if session and session.get("user_id") is not None:
+                if int(session["user_id"]) == user_id:
+                    return _ok({"user": user})
+
+        return _deny(403, "无权访问该文件")

@@ -2521,12 +2521,18 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         
         try:
             session_service = MCPHTTPHandler.server_instance.session_service
+            rbac_api = getattr(MCPHTTPHandler.server_instance, "rbac_api", None)
+            user = self._require_logged_in_user()
+            if user is None:
+                return
+            user_id = int(user["id"])
+            is_director = rbac_api._is_director(user_id) if rbac_api else False
             print(f"[DEBUG] 会话服务已初始化，开始处理请求")
             
             if method == 'GET':
                 # GET /api/sessions - 获取会话列表
                 if path == '/api/sessions':
-                    sessions = session_service.list_sessions()
+                    sessions = session_service.list_sessions(user_id=user_id)
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Access-Control-Allow-Origin', '*')
@@ -2536,12 +2542,18 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 elif path.startswith('/api/sessions/'):
                     session_id = path.split('/')[-1]
                     session = session_service.get_session(session_id)
-                    if session:
+                    if session and self._can_access_session(session, user_id, is_director):
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')
                         self.send_header('Access-Control-Allow-Origin', '*')
                         self.end_headers()
                         self.wfile.write(json.dumps(session, ensure_ascii=False).encode('utf-8'))
+                    elif session:
+                        self.send_response(403)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "无权访问该会话"}).encode('utf-8'))
                     else:
                         self.send_response(404)
                         self.send_header('Content-Type', 'application/json')
@@ -2570,7 +2582,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         self.wfile.write(json.dumps({"error": "缺少session_id"}).encode('utf-8'))
                         return
                     
-                    session = session_service.create_session(session_id, title)
+                    session = session_service.create_session(session_id, title, user_id=user_id)
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Access-Control-Allow-Origin', '*')
@@ -2610,6 +2622,16 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 
                     print(f"[DEBUG] 调用session_service.add_message...")
                     try:
+                        existing = session_service.get_session(session_id)
+                        if existing and not self._can_access_session(existing, user_id, is_director):
+                            self.send_response(403)
+                            self.send_header('Content-Type', 'application/json')
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"error": "无权访问该会话"}).encode('utf-8'))
+                            return
+                        if not existing:
+                            session_service.create_session(session_id, user_id=user_id)
                         message_id = session_service.add_message(session_id, role, content, extra=extra)
                         print(f"[DEBUG] ✅ 消息已添加，message_id: {message_id}")
                     except Exception as e:
@@ -2654,6 +2676,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                             self.send_header('Access-Control-Allow-Origin', '*')
                             self.end_headers()
                             self.wfile.write(json.dumps({"error": "会话不存在"}).encode('utf-8'))
+                            return
+                        if not self._can_access_session(existing_session, user_id, is_director):
+                            self.send_response(403)
+                            self.send_header('Content-Type', 'application/json')
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"error": "无权访问该会话"}).encode('utf-8'))
                             return
                         
                         # 执行更新
@@ -2731,6 +2760,21 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         self.end_headers()
                         self.wfile.write(json.dumps({"error": "缺少 feedback"}).encode('utf-8'))
                         return
+                    existing = session_service.get_session(session_id)
+                    if not existing:
+                        self.send_response(404)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "会话不存在"}).encode('utf-8'))
+                        return
+                    if not self._can_access_session(existing, user_id, is_director):
+                        self.send_response(403)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": "无权访问该会话"}).encode('utf-8'))
+                        return
                     try:
                         out = session_service.update_message_feedback(
                             session_id, message_id, data.get('feedback')
@@ -2771,6 +2815,21 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                     else:
                         # 删除指定会话
                         print(f"[MCP Server] 收到删除会话请求: {session_id}")
+                        existing = session_service.get_session(session_id)
+                        if not existing:
+                            self.send_response(404)
+                            self.send_header('Content-Type', 'application/json')
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"error": "会话不存在"}).encode('utf-8'))
+                            return
+                        if not self._can_access_session(existing, user_id, is_director):
+                            self.send_response(403)
+                            self.send_header('Content-Type', 'application/json')
+                            self.send_header('Access-Control-Allow-Origin', '*')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"error": "无权访问该会话"}).encode('utf-8'))
+                            return
                         print(f"[MCP Server] 调用 session_service.delete_session({session_id})")
                         deleted = session_service.delete_session(session_id)
                         print(f"[MCP Server] 删除结果: {deleted}")
@@ -2995,6 +3054,23 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({"error": str(e)}).encode('utf-8'))
     
+    def _check_file_access_or_deny(self, file_id: str, file_info: Optional[dict]) -> bool:
+        api = getattr(MCPHTTPHandler.server_instance, "rbac_api", None)
+        if not api:
+            self._write_json(503, {"error": "RBAC 服务未初始化"})
+            return False
+        session_service = getattr(MCPHTTPHandler.server_instance, "session_service", None)
+        status, payload = api.check_file_download_access(
+            self.headers.get("Authorization"),
+            file_id,
+            file_info,
+            session_service=session_service,
+        )
+        if status != 200:
+            self._write_json(status, payload)
+            return False
+        return True
+
     def _handle_file_api(self, path: str, method: str = 'GET'):
         """处理文件API请求"""
         if not MCPHTTPHandler.server_instance.file_service:
@@ -3038,6 +3114,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         self.send_header('Access-Control-Allow-Origin', '*')
                         self.end_headers()
                         self.wfile.write(json.dumps({"error": "文件不存在"}).encode('utf-8'))
+                        return
+                    if not self._check_file_access_or_deny(file_id, file_info):
                         return
                     
                     file_data = file_service.get_file_data(file_id)
@@ -3085,6 +3163,8 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         self.send_header('Access-Control-Allow-Origin', '*')
                         self.end_headers()
                         self.wfile.write(json.dumps({"error": "文件不存在"}).encode('utf-8'))
+                        return
+                    if not self._check_file_access_or_deny(file_id, file_info):
                         return
                     
                     # 获取原始文件数据（确保是二进制模式读取）
@@ -3216,6 +3296,23 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _require_logged_in_user(self):
+        api = getattr(MCPHTTPHandler.server_instance, "rbac_api", None)
+        if not api:
+            self._write_json(503, {"error": "RBAC 服务未初始化"})
+            return None
+        status, payload = api.require_user(self.headers.get("Authorization"))
+        if status != 200:
+            self._write_json(status, payload)
+            return None
+        return payload["user"]
+
+    def _can_access_session(self, session: dict, user_id: int, is_director: bool) -> bool:
+        owner = session.get("user_id")
+        if owner is None:
+            return is_director
+        return int(owner) == int(user_id) or is_director
 
     def _handle_rbac_api(self, method: str):
         api = getattr(MCPHTTPHandler.server_instance, "rbac_api", None)

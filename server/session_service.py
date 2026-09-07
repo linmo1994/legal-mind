@@ -58,6 +58,13 @@ class SessionService:
         except sqlite3.OperationalError:
             # 字段已存在，忽略错误
             pass
+
+        try:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
+            conn.commit()
+            print("[SessionService] 已添加user_id字段")
+        except sqlite3.OperationalError:
+            pass
         
         # 创建消息表
         cursor.execute("""
@@ -87,7 +94,7 @@ class SessionService:
         conn.close()
         print(f"[SessionService] 数据库初始化完成: {self.db_path}")
     
-    def create_session(self, session_id: str, title: str = None) -> Dict:
+    def create_session(self, session_id: str, title: str = None, user_id: Optional[int] = None) -> Dict:
         """
         创建新会话
         
@@ -109,8 +116,9 @@ class SessionService:
             INSERT OR REPLACE INTO sessions (
                 session_id, title, status, current_intent, 
                 collected_parameters, missing_parameters, stage,
-                context_cache, created_at, updated_at, last_user_input, last_user_input_time
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                context_cache, created_at, updated_at, last_user_input, last_user_input_time,
+                user_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_id,
             title or '',
@@ -123,7 +131,8 @@ class SessionService:
             now,
             now,
             '',
-            None
+            None,
+            user_id
         ))
         
         conn.commit()
@@ -392,7 +401,7 @@ class SessionService:
             'feedback': norm,
         }
     
-    def list_sessions(self, limit: int = 100) -> List[Dict]:
+    def list_sessions(self, limit: int = 100, user_id: Optional[int] = None) -> List[Dict]:
         """
         获取会话列表（仅含至少一条消息的会话）。
         
@@ -421,19 +430,35 @@ class SessionService:
             print(f"[SessionService] purged {cursor.rowcount} empty session(s)")
         conn.commit()
         
-        cursor.execute(
-            """
-            SELECT s.session_id, s.title, s.status, s.created_at, s.updated_at,
-                   s.last_user_input, s.last_user_input_time
-            FROM sessions s
-            WHERE EXISTS (
-                SELECT 1 FROM messages m WHERE m.session_id = s.session_id LIMIT 1
+        if user_id is not None:
+            cursor.execute(
+                """
+                SELECT s.session_id, s.title, s.status, s.created_at, s.updated_at,
+                       s.last_user_input, s.last_user_input_time, s.user_id
+                FROM sessions s
+                WHERE s.user_id = ?
+                  AND EXISTS (
+                    SELECT 1 FROM messages m WHERE m.session_id = s.session_id LIMIT 1
+                )
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
             )
-            ORDER BY s.updated_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        )
+        else:
+            cursor.execute(
+                """
+                SELECT s.session_id, s.title, s.status, s.created_at, s.updated_at,
+                       s.last_user_input, s.last_user_input_time, s.user_id
+                FROM sessions s
+                WHERE EXISTS (
+                    SELECT 1 FROM messages m WHERE m.session_id = s.session_id LIMIT 1
+                )
+                ORDER BY s.updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
         
         rows = cursor.fetchall()
         conn.close()

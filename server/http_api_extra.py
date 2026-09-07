@@ -637,7 +637,9 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
     if session_id and session_service and not result.get("legacy"):
         try:
             if not session_service.get_session(session_id):
-                session_service.create_session(session_id)
+                session_service.create_session(
+                    session_id, user_id=body.get("_auth_user_id")
+                )
             # Persist original user_text only — do not store materials block in history.
             session_service.add_message(session_id, "user", user_text)
             assistant_text = result.get("visible_text") or ""
