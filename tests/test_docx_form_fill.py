@@ -4,6 +4,7 @@ from docx import Document
 
 from docx_form_fill import (
     PLACEHOLDER_MISSING,
+    build_element_dict,
     fill_docx_bytes,
     scan_slots_from_document,
 )
@@ -52,3 +53,23 @@ class TestDocxFormFill(unittest.TestCase):
         self.assertIn("张三", text)
         self.assertNotIn("{", text)
         self.assertNotIn("}", text)
+
+
+class TestElementDict(unittest.TestCase):
+    def test_rules_extract_plaintiff_defendant(self):
+        text = "原告张三，被告李四。请求还款。"
+        d = build_element_dict(text, slot_keys=["原告", "被告", "诉讼请求"], write_llm=None)
+        self.assertEqual(d.get("原告"), "张三")
+        self.assertEqual(d.get("被告"), "李四")
+
+    def test_llm_fills_missing_keys(self):
+        def write_llm(system, user, hist=None):
+            return '{"住所地":"本市某路1号"}'
+
+        d = build_element_dict(
+            "原告张三",
+            slot_keys=["原告", "住所地"],
+            write_llm=write_llm,
+        )
+        self.assertEqual(d.get("原告"), "张三")
+        self.assertEqual(d.get("住所地"), "本市某路1号")

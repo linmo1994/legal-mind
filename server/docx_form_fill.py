@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 from typing import Any, Dict, List, Optional
 
@@ -169,3 +170,54 @@ def has_fillable_slots(docx_bytes: bytes) -> bool:
     except Exception:
         return False
     return bool(scan_slots_from_document(doc))
+
+
+_PARTY_PATTERNS = (
+    ("原告", re.compile(r"原告[:：\s]*([^\s，。,；;]{1,30})")),
+    ("被告", re.compile(r"被告[:：\s]*([^\s，。,；;]{1,30})")),
+    ("申请人", re.compile(r"申请人[:：\s]*([^\s，。,；;]{1,30})")),
+    ("被申请人", re.compile(r"被申请人[:：\s]*([^\s，。,；;]{1,30})")),
+)
+
+
+def build_element_dict(
+    source_text: str,
+    *,
+    slot_keys: Optional[List[str]] = None,
+    write_llm=None,
+) -> Dict[str, Any]:
+    text = source_text or ""
+    out: Dict[str, Any] = {}
+    for key, rx in _PARTY_PATTERNS:
+        if slot_keys is not None and key not in slot_keys:
+            continue
+        m = rx.search(text)
+        if m:
+            out[key] = m.group(1).strip()
+    # 身份证
+    if slot_keys is None or "身份证号" in slot_keys:
+        m = re.search(r"身份证[号码]*[:：\s]*([0-9Xx]{15,18})", text)
+        if m:
+            out["身份证号"] = m.group(1)
+    missing = []
+    if slot_keys:
+        missing = [k for k in slot_keys if k not in out or not str(out.get(k) or "").strip()]
+    if write_llm and missing:
+        try:
+            raw = write_llm(
+                "你是法律文书要素抽取助手。只输出一个 JSON 对象，键为给定字段。"
+                "未知填 null，禁止编造当事人身份信息。",
+                "字段：" + "、".join(missing) + "\n\n材料：\n" + text[:8000],
+            )
+            raw = (raw or "").strip()
+            start, end = raw.find("{"), raw.rfind("}")
+            if start >= 0 and end > start:
+                data = json.loads(raw[start : end + 1])
+                if isinstance(data, dict):
+                    for k in missing:
+                        v = data.get(k)
+                        if v is not None and str(v).strip() and str(v).strip().lower() != "null":
+                            out[k] = str(v).strip()
+        except Exception as exc:
+            print(f"[docx_form_fill] element llm failed: {exc}")
+    return out
