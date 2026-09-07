@@ -41,6 +41,12 @@ PERMISSIONS = [
     ("cap.judge", "断案", "capability", "业务"),
     ("cap.doc_write", "文书终稿", "capability", "业务"),
     ("cap.retrieve", "检索", "capability", "业务"),
+    ("cap.doc_submit", "提交文书审核", "capability", "业务"),
+    ("cap.doc_approve_lead", "主办审文书", "capability", "业务"),
+    ("cap.doc_approve_partner", "合伙人审文书", "capability", "业务"),
+    ("cap.case_stage_advance", "推进案件阶段", "capability", "业务"),
+    ("cap.audit_read", "审计只读", "capability", "管理"),
+    ("page.admin.approvals", "审批待办", "page", "页面"),
 ]
 
 # Default role -> permission codes (spec 4.2)
@@ -67,6 +73,9 @@ DEFAULT_ROLE_PERMS = {
         "cap.judge",
         "cap.doc_write",
         "cap.retrieve",
+        "cap.doc_approve_partner",
+        "cap.case_stage_advance",
+        "page.admin.approvals",
     ],
     "lead_lawyer": [
         "page.home",
@@ -75,12 +84,18 @@ DEFAULT_ROLE_PERMS = {
         "cap.judge",
         "cap.doc_write",
         "cap.retrieve",
+        "cap.doc_submit",
+        "cap.doc_approve_lead",
+        "cap.case_stage_advance",
+        "page.admin.approvals",
     ],
     "assistant": [
         "page.home",
         "page.chat",
         "cap.chat",
         "cap.retrieve",
+        "cap.doc_submit",
+        "page.admin.approvals",
     ],
 }
 
@@ -102,6 +117,56 @@ CASE_STATUSES = [
 ]
 CASE_STATUS_CODES = {code for code, _ in CASE_STATUSES}
 CASE_STATUS_LABELS = {code: label for code, label in CASE_STATUSES}
+
+CASE_STAGE_INTAKE = "intake"
+CASE_STAGE_MATERIALS = "materials_ready"
+CASE_STAGE_STRATEGY = "strategy_docs"
+CASE_STAGE_LITIGATION = "litigation"
+CASE_STAGE_CLOSED = "closed"
+CASE_STAGE_ORDER = [
+    CASE_STAGE_INTAKE,
+    CASE_STAGE_MATERIALS,
+    CASE_STAGE_STRATEGY,
+    CASE_STAGE_LITIGATION,
+    CASE_STAGE_CLOSED,
+]
+CASE_STAGE_CODES = set(CASE_STAGE_ORDER)
+CASE_STAGE_LABELS = {
+    "intake": "收案分案",
+    "materials_ready": "材料完备",
+    "strategy_docs": "策略与文书",
+    "litigation": "诉讼推进",
+    "closed": "结案归档",
+}
+LEGACY_STATUS_TO_STAGE = {
+    "init": "intake",
+    "assigned": "intake",
+    "analyzing": "materials_ready",
+    "handling": "strategy_docs",
+    "closed": "closed",
+}
+
+
+def normalize_case_stage(code: Optional[str]) -> str:
+    if code in CASE_STAGE_CODES:
+        return code
+    return LEGACY_STATUS_TO_STAGE.get(code or "", CASE_STAGE_INTAKE)
+
+
+def next_stage(current: str) -> Optional[str]:
+    cur = normalize_case_stage(current)
+    try:
+        i = CASE_STAGE_ORDER.index(cur)
+    except ValueError:
+        return None
+    if i + 1 >= len(CASE_STAGE_ORDER):
+        return None
+    return CASE_STAGE_ORDER[i + 1]
+
+
+def can_transition_stage(frm: str, to: str) -> bool:
+    return next_stage(frm) == to
+
 
 # 案件类型：code -> 中文名 / 案号缩写
 CASE_TYPE_CIVIL = "civil"
@@ -273,6 +338,9 @@ def case_status_label(code: Optional[str]) -> str:
 def enrich_case(row: Dict[str, Any]) -> Dict[str, Any]:
     item = dict(row)
     item["status_label"] = case_status_label(item.get("status"))
+    stage = normalize_case_stage(item.get("status"))
+    item["stage"] = stage
+    item["stage_label"] = CASE_STAGE_LABELS.get(stage, stage)
     meta: Dict[str, Any] = {}
     raw = item.get("meta_json")
     if raw:
