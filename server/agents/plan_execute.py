@@ -31,6 +31,8 @@ PLANNER_SYSTEM = (
     "你是法律任务规划助手（planner）。根据【用户请求】产出可执行的步骤列表。"
     "若另附案件材料，仅作背景；不要仅因材料中出现起诉状/文书等词就安排起草文书；"
     "用户只要求介绍/梳理案情时，安排分析或整理，不要 draft_doc。"
+    "用户明确要求起草/写起诉状/要素式文书时，计划须包含调用 draft_doc 导出 Word，"
+    "不要只安排 reason 在对话里写传统叙述式正文。"
     "只输出 JSON：{\"plan\":[\"步骤1\", ...]}，步骤为自然语言，长度 1–8。"
     + _NO_CASE_GUIDANCE
     + _RETRIEVE_GUIDANCE
@@ -41,6 +43,8 @@ EXECUTOR_SYSTEM = (
     f"可用工具：{', '.join(TOOL_NAMES)}。"
     "以【用户请求】为准；案件材料仅为背景。"
     "用户只要介绍/梳理案情时，优先 reason，不要选 draft_doc。"
+    "用户要起草起诉状/要素式文书时，优先选 draft_doc（会匹配模版库并导出 Word），"
+    "不要用 reason 在对话中写完整诉状正文。"
     "只输出 JSON：{\"tool\":\"工具名\",\"args\":{...}}。"
     "若当前步骤是检索法规，选择 retrieve_law；检索类案则 retrieve_case；"
     "用户目标若是查找案例/类案，不要选择 retrieve_law；若是查找法条/某法第×条，不要选择 retrieve_case。"
@@ -60,6 +64,8 @@ REPLAN_SYSTEM = (
     + _RETRIEVE_GUIDANCE
     + "若用户明确只要类案而尚未检索类案，优先 continue 并补上类案检索；不要改去检索法规凑答。"
     + "若仍需法源而过去步骤尚未检索成功，优先 continue 并补上检索步骤，再 response。"
+    + "若用户要生成起诉状/要素式文书/导出文书，必须先完成 draft_doc 再 response；"
+    "不要用 response 在对话里直接输出传统叙述式起诉状全文来代替 Word。"
     + "若用户要生成起诉状/导出文书且已提供原告与被告（或要求占位起草），"
     "应 continue 并安排 draft_doc，或在已起草后 response；不要在能起草时仅 ask_user。"
 )
@@ -87,6 +93,17 @@ _DOC_INTENT_KEYS = (
 def _wants_legal_doc(text: str) -> bool:
     t = text or ""
     return any(k in t for k in _DOC_INTENT_KEYS)
+
+
+def _has_explicit_draft_ask(text: str) -> bool:
+    """User clearly asks to draft a pleading — allow 【待补充】 without parties in the ask."""
+    t = text or ""
+    has_verb = any(k in t for k in ("起草", "写一份", "生成", "帮我写", "请写"))
+    has_doc = any(
+        k in t
+        for k in ("起诉状", "答辩状", "申请书", "协议书", "判决书", "要素式", "文书")
+    )
+    return has_verb and has_doc
 
 
 def _has_party_or_placeholder_signal(text: str) -> bool:
@@ -276,17 +293,19 @@ def _should_auto_draft_doc(
     past_steps: Optional[List[Dict[str, Any]]],
     last_artifact: Optional[Dict[str, Any]],
     user_supplement: str = "",
+    case_context: str = "",
 ) -> bool:
-    """When doc intent + parties/placeholder/export are clear, don't stop without draft_doc."""
+    """When doc intent is clear, don't stop without draft_doc (Word artifact)."""
     if last_artifact or _already_drafted(past_steps):
         return False
     blob = f"{objective or ''}\n{user_supplement or ''}"
     if not _wants_legal_doc(blob):
         return False
-    # 导出 = classic product expectation: draft with 【待补充】 rather than stop at ask_user
-    if "导出" in blob:
+    # 导出 / 明确起草诉状等 → 直接出 Word，缺项【待补充】
+    if "导出" in blob or _has_explicit_draft_ask(blob):
         return True
-    return _has_party_or_placeholder_signal(blob)
+    # 当事人信号可来自用户补充或已选案件材料
+    return _has_party_or_placeholder_signal(f"{blob}\n{case_context or ''}")
 
 
 def _run_forced_draft_doc(
@@ -354,7 +373,11 @@ def _finish_ask_or_response(
         return None
 
     if _should_auto_draft_doc(
-        objective, past_steps, last_artifact, user_supplement=user_supplement
+        objective,
+        past_steps,
+        last_artifact,
+        user_supplement=user_supplement,
+        case_context=str(tool_ctx.get("case_context") or ""),
     ):
         past_steps, tool_calls_used, art, obs = _run_forced_draft_doc(
             write_llm=write_llm,
@@ -460,7 +483,11 @@ def _complete_with_optional_auto_draft(
     """Budget/empty-plan wrap; force draft_doc first when doc export is owed."""
     case_context = str(tool_ctx.get("case_context") or "")
     if _should_auto_draft_doc(
-        objective, past_steps, last_artifact, user_supplement=user_supplement
+        objective,
+        past_steps,
+        last_artifact,
+        user_supplement=user_supplement,
+        case_context=case_context,
     ):
         past_steps, tool_calls_used, art, obs = _run_forced_draft_doc(
             write_llm=write_llm,

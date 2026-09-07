@@ -270,6 +270,32 @@ class TestPlanExecute(unittest.TestCase):
                 past_steps=[],
                 last_artifact=None,
                 user_supplement="",
+                case_context="原告张三 被告李四 民事起诉状",
+            )
+        )
+
+    def test_explicit_element_form_ask_auto_drafts_without_parties_in_objective(self):
+        from agents.plan_execute import _has_explicit_draft_ask, _should_auto_draft_doc
+
+        ask = "帮我起草一份要素式民间借贷纠纷起诉状"
+        self.assertTrue(_has_explicit_draft_ask(ask))
+        self.assertTrue(
+            _should_auto_draft_doc(
+                ask,
+                past_steps=[],
+                last_artifact=None,
+                user_supplement="",
+                case_context="",
+            )
+        )
+        # Parties only in case materials also unlock when ask is weaker but still doc-intent
+        self.assertTrue(
+            _should_auto_draft_doc(
+                "生成起诉状",
+                past_steps=[],
+                last_artifact=None,
+                user_supplement="",
+                case_context="原告：李小四\n被告：王小五",
             )
         )
 
