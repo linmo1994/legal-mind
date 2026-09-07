@@ -4681,6 +4681,72 @@ function tryHandleOrchestrate(fullUserMessage) {
   })();
 }
 
+const ARTIFACT_STATUS_LABELS = {
+  draft: '草稿',
+  pending_lead: '待主办审核',
+  pending_partner: '待合伙人审核',
+  approved: '已定稿',
+  rejected: '已驳回'
+};
+
+function getArtifactDisplayStatus(artifact) {
+  if (!artifact) return 'draft';
+  const raw = artifact.approval_status || 'draft';
+  if (raw === 'draft' && artifact.reject_comment) return 'rejected';
+  return raw;
+}
+
+function getArtifactDownloadLabel(displayStatus) {
+  if (displayStatus === 'approved') return '定稿下载';
+  if (displayStatus === 'draft' || displayStatus === 'rejected' ||
+      displayStatus === 'pending_lead' || displayStatus === 'pending_partner') {
+    return '下载工作稿';
+  }
+  return '下载';
+}
+
+function applyDraftFilenameSuffix(filename) {
+  const base = filename || '法律文书.docx';
+  const dot = base.lastIndexOf('.');
+  if (dot > 0) {
+    const name = base.slice(0, dot);
+    const ext = base.slice(dot);
+    if (name.endsWith('_草稿')) return base;
+    return name + '_草稿' + ext;
+  }
+  if (base.endsWith('_草稿')) return base;
+  return base + '_草稿';
+}
+
+async function submitArtifactForReview(artifactId, onSuccess) {
+  if (!CONFIG || !CONFIG.mcpServerUrl || !artifactId) return;
+  const headers = (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders)
+    ? LegalMindAuth.authHeaders()
+    : { 'Content-Type': 'application/json' };
+  try {
+    updateStatus('正在提交审核...', 'connecting');
+    const resp = await fetch(`${CONFIG.mcpServerUrl}/api/artifacts/${artifactId}/submit`, {
+      method: 'POST',
+      headers
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.status === 401) {
+      if (typeof LegalMindAuth !== 'undefined') {
+        LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
+      }
+      return;
+    }
+    if (!resp.ok) {
+      throw new Error(data.error || `提交失败 HTTP ${resp.status}`);
+    }
+    updateStatus('已提交审核', 'connected');
+    if (onSuccess && data.artifact) onSuccess(data.artifact);
+  } catch (err) {
+    updateStatus('提交失败', 'disconnected');
+    showError(err.message || '提交审核失败');
+  }
+}
+
 function addOrchestrateDownload(artifact) {
   if (!elements.chatMessages || !artifact) return;
   const wrap = document.createElement('div');
@@ -4694,6 +4760,9 @@ function addOrchestrateDownload(artifact) {
   const card = document.createElement('div');
   card.className = 'generated-doc-card';
 
+  let cardArtifact = Object.assign({}, artifact);
+  const hasArtifactId = cardArtifact.artifact_id != null;
+
   const top = document.createElement('div');
   top.className = 'generated-doc-main';
   const icon = document.createElement('div');
@@ -4703,19 +4772,24 @@ function addOrchestrateDownload(artifact) {
   info.className = 'file-info';
   const name = document.createElement('div');
   name.className = 'file-name';
-  name.textContent = artifact.filename || '法律文书.docx';
+  name.textContent = cardArtifact.filename || '法律文书.docx';
   const meta = document.createElement('div');
   meta.className = 'file-size';
-  meta.textContent = (artifact.title || 'Word 文书') + ' · 可下载核阅';
+  meta.textContent = (cardArtifact.title || 'Word 文书') + ' · 可下载核阅';
   info.appendChild(name);
   info.appendChild(meta);
   top.appendChild(icon);
   top.appendChild(info);
 
+  const badge = document.createElement('span');
+  badge.className = 'generated-doc-status-badge';
+  badge.hidden = !hasArtifactId;
+  top.appendChild(badge);
+
   const preview = document.createElement('div');
   preview.className = 'generated-doc-preview';
   preview.hidden = true;
-  const tables = Array.isArray(artifact.preview_tables) ? artifact.preview_tables : [];
+  const tables = Array.isArray(cardArtifact.preview_tables) ? cardArtifact.preview_tables : [];
   if (tables.length) {
     preview.classList.add('has-tables');
     tables.forEach((grid, ti) => {
@@ -4741,8 +4815,22 @@ function addOrchestrateDownload(artifact) {
       }
     });
   } else {
-    preview.textContent = artifact.preview || '暂无预览，请下载 Word 查看全文。';
+    preview.textContent = cardArtifact.preview || '暂无预览，请下载 Word 查看全文。';
   }
+
+  const hint = document.createElement('div');
+  hint.className = 'generated-doc-hint';
+  hint.hidden = hasArtifactId;
+  hint.textContent = '未绑定案件，无法进入所内审批';
+
+  const submitRow = document.createElement('div');
+  submitRow.className = 'generated-doc-actions';
+  submitRow.hidden = true;
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.className = 'generated-doc-submit-btn';
+  submitBtn.textContent = '提交审核';
+  submitRow.appendChild(submitBtn);
 
   const tabs = document.createElement('div');
   tabs.className = 'generated-doc-tabs';
@@ -4757,6 +4845,37 @@ function addOrchestrateDownload(artifact) {
   tabs.appendChild(tabPreview);
   tabs.appendChild(tabDownload);
 
+  function refreshApprovalUi() {
+    const displayStatus = hasArtifactId ? getArtifactDisplayStatus(cardArtifact) : null;
+    if (hasArtifactId) {
+      badge.hidden = false;
+      badge.textContent = ARTIFACT_STATUS_LABELS[displayStatus] || displayStatus;
+      badge.className = 'generated-doc-status-badge status-' + displayStatus;
+      tabDownload.textContent = getArtifactDownloadLabel(displayStatus);
+      tabDownload.classList.toggle('generated-doc-tab-primary', displayStatus === 'approved');
+      const canSubmit = displayStatus === 'draft' || displayStatus === 'rejected';
+      submitRow.hidden = !canSubmit;
+      submitBtn.disabled = false;
+      submitBtn.textContent = '提交审核';
+    } else {
+      badge.hidden = true;
+      hint.hidden = false;
+      tabDownload.textContent = '下载';
+      tabDownload.classList.remove('generated-doc-tab-primary');
+      submitRow.hidden = true;
+    }
+  }
+
+  function resolveDownloadFilename() {
+    const baseName = cardArtifact.filename || '法律文书.docx';
+    if (!hasArtifactId) return baseName;
+    const displayStatus = getArtifactDisplayStatus(cardArtifact);
+    if (displayStatus === 'approved') return baseName;
+    return applyDraftFilenameSuffix(baseName);
+  }
+
+  refreshApprovalUi();
+
   tabPreview.onclick = () => {
     preview.hidden = !preview.hidden;
     tabPreview.classList.toggle('active', !preview.hidden);
@@ -4765,11 +4884,34 @@ function addOrchestrateDownload(artifact) {
     tabDownload.classList.add('active');
     tabPreview.classList.remove('active');
     preview.hidden = true;
-    downloadFileFromCard(artifact.file_id, artifact.filename || '法律文书.docx');
+    downloadFileFromCard(cardArtifact.file_id, resolveDownloadFilename());
+  };
+
+  submitBtn.onclick = async () => {
+    if (!hasArtifactId || submitBtn.disabled) return;
+    submitBtn.disabled = true;
+    submitBtn.textContent = '提交中…';
+    try {
+      await submitArtifactForReview(cardArtifact.artifact_id, (updated) => {
+        cardArtifact = Object.assign({}, cardArtifact, updated, {
+          artifact_id: updated.id != null ? updated.id : cardArtifact.artifact_id,
+          approval_status: updated.approval_status,
+          reject_comment: updated.reject_comment
+        });
+        refreshApprovalUi();
+      });
+    } finally {
+      if (!submitRow.hidden) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = '提交审核';
+      }
+    }
   };
 
   card.appendChild(top);
   card.appendChild(preview);
+  if (!hasArtifactId) card.appendChild(hint);
+  card.appendChild(submitRow);
   card.appendChild(tabs);
   content.appendChild(card);
   wrap.appendChild(header);
