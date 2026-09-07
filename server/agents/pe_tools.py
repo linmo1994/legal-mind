@@ -115,6 +115,44 @@ def _artifact_from_saved_docx(
     }
 
 
+def _preview_text_from_docx_bytes(docx_bytes: bytes, *, limit: int = 600) -> str:
+    """Plain-text preview from a filled/exported docx (paragraphs + table cells)."""
+    if not docx_bytes:
+        return ""
+    try:
+        import io
+
+        from docx import Document
+
+        doc = Document(io.BytesIO(docx_bytes))
+        parts: List[str] = []
+        for para in doc.paragraphs:
+            t = (para.text or "").strip()
+            if t:
+                parts.append(t)
+        for table in doc.tables:
+            for row in table.rows:
+                seen = set()
+                cells_out: List[str] = []
+                for cell in row.cells:
+                    cid = id(cell._tc)
+                    if cid in seen:
+                        continue
+                    seen.add(cid)
+                    t = (cell.text or "").strip()
+                    if t:
+                        cells_out.append(t.replace("\n", " "))
+                if cells_out:
+                    parts.append(" | ".join(cells_out))
+        text = "\n".join(parts).strip()
+        if len(text) > limit:
+            return text[: limit - 1] + "…"
+        return text
+    except Exception as exc:
+        print(f"[pe_tools] docx preview extract failed: {exc}")
+        return ""
+
+
 def _export_docx_artifact(
     title: str,
     body: str,
@@ -461,10 +499,11 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
                 )
                 if filled_summary:
                     obs += f"\n已填要素：{filled_summary}"
+                preview = _preview_text_from_docx_bytes(filled) or obs
                 artifact = _artifact_from_saved_docx(
                     info,
                     title=tmpl_name,
-                    preview=obs,
+                    preview=preview,
                 )
                 return {"observation": _trim(obs), "citations": [], "artifact": artifact}
 
