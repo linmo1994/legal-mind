@@ -26,10 +26,11 @@
       id: "cases",
       label: "案件管理",
       defaultId: "cases",
-      anyPerm: ["cap.case_manage", "cap.case_assign"],
+      anyPerm: ["cap.case_manage", "cap.case_assign", "page.admin.approvals"],
       items: [
         { id: "cases", href: "admin_cases.html", label: "案件", perm: "cap.case_manage" },
-        { id: "clients", href: "admin_clients.html", label: "客户", perm: "cap.case_manage" }
+        { id: "clients", href: "admin_clients.html", label: "客户", perm: "cap.case_manage" },
+        { id: "approvals", href: "admin_approvals.html", label: "审批待办", perm: "page.admin.approvals" }
       ]
     },
     {
@@ -70,7 +71,8 @@
         || LegalMindAuth.hasPerm("cap.case_manage")
         || LegalMindAuth.hasPerm("cap.user_manage")
         || LegalMindAuth.hasPerm("cap.skill_manage")
-        || LegalMindAuth.hasPerm("cap.vectorize");
+        || LegalMindAuth.hasPerm("cap.vectorize")
+        || LegalMindAuth.hasPerm("page.admin.approvals");
     }
     return LegalMindAuth.hasPerm(code) || LegalMindAuth.hasPerm("page.admin");
   }

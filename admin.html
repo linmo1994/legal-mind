@@ -54,6 +54,11 @@
           <div class="stats-value" id="statClients">—</div>
           <div class="stats-hint">委托客户数</div>
         </a>
+        <a class="stats-card" href="admin_approvals.html" data-page="admin_approvals.html">
+          <div class="stats-label">审批待办</div>
+          <div class="stats-value" id="statApprovals">—</div>
+          <div class="stats-hint">我的待审文书</div>
+        </a>
       </div>
     </section>
 
@@ -147,6 +152,16 @@
         }
         document.getElementById('statLawsHint').textContent = docHint;
         document.getElementById('statCasesKbHint').textContent = docHint;
+        if (window.LegalMindAuth && (LegalMindAuth.hasPerm('page.admin.approvals') || LegalMindAuth.hasPerm('page.admin'))) {
+          try {
+            const inbox = await (await fetch(base + '/api/approvals/inbox', { headers: headers })).json();
+            const el = document.getElementById('statApprovals');
+            if (el) el.textContent = (inbox.tasks && inbox.tasks.length != null) ? inbox.tasks.length : '—';
+          } catch (e) {
+            const el = document.getElementById('statApprovals');
+            if (el) el.textContent = '—';
+          }
+        }
       } catch (err) {
         status.hidden = false;
         status.textContent = '无法加载统计：' + err;
