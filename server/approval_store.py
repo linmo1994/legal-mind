@@ -185,7 +185,7 @@ class ApprovalStore:
                 return int(member["user_id"])
         return None
 
-    def _get_task(self, task_id: int) -> Optional[Dict[str, Any]]:
+    def get_task(self, task_id: int) -> Optional[Dict[str, Any]]:
         conn = self._connect()
         row = conn.execute(
             "SELECT * FROM approval_tasks WHERE id = ?",
@@ -193,6 +193,9 @@ class ApprovalStore:
         ).fetchone()
         conn.close()
         return self._enrich_task(dict(row)) if row else None
+
+    def _get_task(self, task_id: int) -> Optional[Dict[str, Any]]:
+        return self.get_task(task_id)
 
     def _create_task(
         self,
@@ -306,6 +309,8 @@ class ApprovalStore:
         actor_user_id: int,
         decision: str,
         comment: str = "",
+        *,
+        allow_non_assignee: bool = False,
     ) -> Dict[str, Any]:
         task = self._get_task(task_id)
         if not task:
@@ -321,7 +326,7 @@ class ApprovalStore:
 
         if task["status"] != TASK_STATUS_OPEN:
             raise ValueError("task is not open")
-        if int(task["assignee_user_id"]) != int(actor_user_id):
+        if int(task["assignee_user_id"]) != int(actor_user_id) and not allow_non_assignee:
             raise ValueError("not task assignee")
         if decision not in ("approve", "reject"):
             raise ValueError("invalid decision")

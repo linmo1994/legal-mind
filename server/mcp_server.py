@@ -54,9 +54,11 @@ class MCPServer:
         self.rbac_service = None
         self.rbac_api = None
         self.approval_store = None
+        self.approval_api = None
         try:
             from approval_store import ApprovalStore
             from auth_service import AuthService
+            from http_approval_api import ApprovalHttpApi
             from http_rbac_api import RbacHttpApi
             from rbac_service import RbacService
             from rbac_store import RbacStore
@@ -81,6 +83,12 @@ class MCPServer:
                 self.auth_service,
                 self.rbac_service,
                 approval_store=self.approval_store,
+            )
+            self.approval_api = ApprovalHttpApi(
+                self.rbac_store,
+                self.auth_service,
+                self.rbac_service,
+                self.approval_store,
             )
             print(f"[MCP Server] RBAC 服务初始化成功: {rbac_db}")
             print("[MCP Server] ApprovalStore 初始化成功: ./approval.db")
@@ -1318,6 +1326,14 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if path.startswith('/api/cases/') and path.endswith('/stage'):
             self._handle_rbac_api('POST')
             return
+        if path == '/api/artifacts' or (
+            path.startswith('/api/artifacts/') and path.endswith('/submit')
+        ):
+            self._handle_approval_api('POST')
+            return
+        if path.startswith('/api/approvals/') and path.endswith('/decide'):
+            self._handle_approval_api('POST')
+            return
         if path == '/api/admin/clients' or path.startswith('/api/admin/clients/'):
             self._handle_rbac_api('POST')
             return
@@ -2431,6 +2447,12 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "ok"}).encode('utf-8'))
         elif path == '/api/auth/me':
             self._handle_rbac_api('GET')
+        elif path == '/api/artifacts' or path.startswith('/api/artifacts/'):
+            self._handle_approval_api('GET')
+        elif path == '/api/approvals/inbox':
+            self._handle_approval_api('GET')
+        elif path == '/api/audit':
+            self._handle_approval_api('GET')
         elif path.startswith('/api/admin/users') or path.startswith('/api/admin/roles') or path.startswith('/api/admin/permissions') or path.startswith('/api/admin/cases') or path.startswith('/api/admin/clients'):
             self._handle_rbac_api('GET')
         elif path.startswith('/api/admin/kb'):
@@ -3378,6 +3400,51 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             import traceback
             print(f"[ERROR] kb api: {e}\n{traceback.format_exc()}")
             self._write_json(400, {"error": "知识库请求失败", "detail": str(e)})
+
+    def _handle_approval_api(self, method: str):
+        api = getattr(MCPHTTPHandler.server_instance, "approval_api", None)
+        if not api:
+            self._write_json(503, {"error": "审批服务未初始化"})
+            return
+        try:
+            from urllib.parse import urlparse, parse_qs
+            from http_approval_api import parse_approval_path
+
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            qs = parse_qs(parsed.query or "")
+            authz = self.headers.get("Authorization")
+            body = {}
+            if method in ("POST", "PUT"):
+                body = self._read_json_body() or {}
+
+            action, resource_id = parse_approval_path(path, method)
+            if action == "create_artifact":
+                self._write_json(*api.create_artifact(authz, body))
+                return
+            if action == "get_artifact" and resource_id:
+                self._write_json(*api.get_artifact(authz, int(resource_id)))
+                return
+            if action == "submit_artifact" and resource_id:
+                self._write_json(*api.submit_artifact(authz, int(resource_id)))
+                return
+            if action == "inbox":
+                self._write_json(*api.inbox(authz))
+                return
+            if action == "decide" and resource_id:
+                self._write_json(*api.decide(authz, int(resource_id), body))
+                return
+            if action == "audit":
+                case_id_raw = qs.get("case_id", [None])[0]
+                case_id = int(case_id_raw) if case_id_raw else None
+                self._write_json(*api.list_audit(authz, case_id))
+                return
+
+            self._write_json(404, {"error": "未找到接口"})
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] approval api: {e}\n{traceback.format_exc()}")
+            self._write_json(400, {"error": "审批请求失败", "detail": str(e)})
 
     def _handle_orchestrate_api(self):
         from orchestrate_sse_util import sse_data_line
