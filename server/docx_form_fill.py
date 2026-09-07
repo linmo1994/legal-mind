@@ -25,9 +25,11 @@ LABEL_KEYS = {
     "事实和理由": "事实与理由",
 }
 
+# Longest-first: {{...}} before {...} so double-brace placeholders are not
+# partially matched as single-brace.
 _PLACEHOLDER_RES = (
-    re.compile(r"\{([^{}]+)\}"),
     re.compile(r"\{\{([^{}]+)\}\}"),
+    re.compile(r"\{([^{}]+)\}"),
     re.compile(r"【([^【】]+)】"),
 )
 

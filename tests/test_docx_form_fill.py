@@ -40,3 +40,15 @@ class TestDocxFormFill(unittest.TestCase):
         self.assertIn("张三", doc.tables[0].cell(0, 0).text)
         self.assertIn(PLACEHOLDER_MISSING, doc.tables[1].cell(0, 1).text)
         self.assertNotIn("{原告姓名}", doc.tables[0].cell(0, 0).text)
+
+    def test_double_brace_placeholder_fills_cleanly(self):
+        doc = Document()
+        t = doc.add_table(rows=1, cols=1)
+        t.cell(0, 0).text = "姓名：{{原告}}"
+        buf = io.BytesIO()
+        doc.save(buf)
+        out = fill_docx_bytes(buf.getvalue(), {"原告": "张三"})
+        text = Document(io.BytesIO(out)).tables[0].cell(0, 0).text
+        self.assertIn("张三", text)
+        self.assertNotIn("{", text)
+        self.assertNotIn("}", text)
