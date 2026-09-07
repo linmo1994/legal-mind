@@ -223,3 +223,22 @@ def parse_evidence_tool_call(reply: str) -> Optional[str]:
         reply,
     )
     return m.group(1) if m else None
+
+
+def format_user_with_case_context(user_request: str, case_context: str = "") -> str:
+    """Attach case materials as background without treating them as the user intent.
+
+    Intent / doc-writing heuristics must use ``user_request`` alone; this helper is
+    for LLM prompts so the model can read the docket while obeying the real ask.
+    """
+    req = (user_request or "").strip()
+    ctx = (case_context or "").strip()
+    if not ctx:
+        return req
+    return (
+        "【用户请求】\n"
+        f"{req}\n\n"
+        "【案件材料｜仅作背景；请按用户请求作答。"
+        "勿仅因材料中出现「起诉状」「文书」「起草」等字样而起草法律文书】\n"
+        f"{ctx}"
+    )

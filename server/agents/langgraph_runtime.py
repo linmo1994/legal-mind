@@ -49,6 +49,7 @@ def run_langgraph(
     cache: Optional[RetrievalCache] = None,
     case_id=None,
     case_store=None,
+    case_context: str = "",
 ) -> Dict[str, Any]:
     messages = messages or []
     skills = skills or []
@@ -81,6 +82,7 @@ def run_langgraph(
                 intent=(state.get("plan") or {}).get("intent"),
                 case_id=case_id,
                 case_store=case_store,
+                case_context=state.get("case_context") or case_context or "",
             )
             trace = list(state.get("trace") or [])
             for item in _trace_from_result(agent_name, last):
@@ -136,6 +138,7 @@ def run_langgraph(
         "messages": messages,
         "skills": skills,
         "plan": plan,
+        "case_context": case_context or "",
         "step_index": 0,
         "trace": [cap_agent("orchestrator")],
         "last": {},

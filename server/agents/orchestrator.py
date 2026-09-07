@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from agents.graph import OrchestrationError, validate_subcall
-from agents.intent_gate import NON_LEGAL_CLOSING, classify_domain_intent
+from agents.intent_gate import classify_domain_intent
 from agents.workflow import emit_step, get_workflow
 from docx_export import build_docx_bytes, default_filename
 
@@ -349,7 +349,7 @@ def _run_non_legal(
     write_llm,
     workflow: Any = None,
 ) -> Dict[str, Any]:
-    """Short path: answer without KB retrieval; append legal-specialty closing."""
+    """Short path: answer without KB retrieval."""
     emit_step("agent", "orchestrator", SPECIALIST_LABELS["orchestrator"])
     body = ""
     if write_llm:
@@ -361,8 +361,6 @@ def _run_non_legal(
     body = (body or "").strip()
     if not body:
         body = "好的，有什么我可以帮您的吗？"
-    if "更擅长" not in body:
-        body = f"{body}\n\n{NON_LEGAL_CLOSING}"
     local_plan = plan_for_intent("non_legal")
     result = {
         "agent": "text_analysis",
@@ -615,6 +613,7 @@ def _run_text_analysis(
     case_id=None,
     case_store=None,
     file_service=None,
+    case_context: str = "",
 ) -> Dict[str, Any]:
     emit_step("agent", "text_analysis", SPECIALIST_LABELS["text_analysis"])
     for item in skills_for_agent(skills, "text_analysis"):
@@ -655,8 +654,11 @@ def _run_text_analysis(
         sub_used.append("legal_retrieval")
         retrieval_text = sub.get("visible_text") or ""
     retrieval_for_llm = (retrieval_text or "")[:1500]
+    from case_materials import format_user_with_case_context
+
+    ask_block = format_user_with_case_context(user_text, case_context)
     user_prompt = (
-        f"【用户问题】\n{user_text}\n\n"
+        f"【用户问题】\n{ask_block}\n\n"
         f"【检索摘要，仅供引用，禁止整段粘贴】\n"
         f"{retrieval_for_llm or '本案事实尚不充分，先不要检索堆砌法条；先向用户问一个最关键的问题。'}\n\n"
         "请直接回复用户：给出阶段性分析，或一次只问一个问题。"
@@ -710,6 +712,7 @@ def _run_doc_writing(
     retrieval_scopes: Optional[List[str]] = None,
     case_id=None,
     case_store=None,
+    case_context: str = "",
 ) -> Dict[str, Any]:
     emit_step("agent", "doc_writing", SPECIALIST_LABELS["doc_writing"])
     for item in skills_for_agent(skills, "doc_writing"):
@@ -742,6 +745,7 @@ def _run_doc_writing(
             case_id=case_id,
             case_store=case_store,
             file_service=file_service,
+            case_context=case_context,
         )
         extras.append(analysis["visible_text"])
         sub_used.append("text_analysis")
@@ -765,8 +769,11 @@ def _run_doc_writing(
             skill_body += f"\n技能《{sk.get('name')}》\n{sk.get('body') or ''}"
 
     extras_text = "\n\n".join(extras)
+    from case_materials import format_user_with_case_context
+
+    ask_block = format_user_with_case_context(user_text, case_context)
     user_prompt = (
-        f"请起草《{title}》。\n\n【用户请求】\n{user_text}\n\n"
+        f"请起草《{title}》。\n\n{ask_block}\n\n"
         f"【文书模板或栏目说明】\n{template_text or '无模板时按该类文书通常结构书写。'}\n\n"
         f"【检索与分析（仅供引用，勿整段粘贴）】\n{extras_text or '无'}\n"
     )
@@ -854,6 +861,7 @@ def run_specialist(
     intent: Optional[str] = None,
     case_id=None,
     case_store=None,
+    case_context: str = "",
 ) -> Dict[str, Any]:
     if agent == "legal_retrieval":
         result = _run_legal_retrieval(
@@ -868,6 +876,7 @@ def run_specialist(
             case_id=case_id,
             case_store=case_store,
             file_service=file_service,
+            case_context=case_context,
         )
     elif agent == "doc_writing":
         result = _run_doc_writing(
@@ -877,6 +886,7 @@ def run_specialist(
             retrieval_scopes=retrieval_scopes,
             case_id=case_id,
             case_store=case_store,
+            case_context=case_context,
         )
     else:
         raise OrchestrationError(f"unknown specialist {agent}")
@@ -907,9 +917,11 @@ def run_orchestrate(
     case_scope=None,
     permitted_case_ids=None,
     resume_state=None,
+    case_context: str = "",
 ) -> Dict[str, Any]:
     messages = messages or []
     skills = skills or []
+    case_context = case_context or ""
     cache = RetrievalCache()
     from agents.workflow import WorkflowTracer, bind_workflow, reset_workflow
     own_token = None
@@ -954,6 +966,7 @@ def run_orchestrate(
                                 skills=skills,
                                 session_id=session_id,
                                 resume_state=resume_state,
+                                case_context=case_context,
                             )
                             return attach_call_flow(pe, workflow)
                         except Exception as exc:
@@ -1019,6 +1032,7 @@ def run_orchestrate(
                 cache=cache,
                 case_id=case_id,
                 case_store=case_store,
+                case_context=case_context,
             )
             result["plan"] = local_plan
             result.setdefault("visible_text", "")
@@ -1052,6 +1066,7 @@ def run_orchestrate(
                 intent=local_plan.get("intent"),
                 case_id=case_id,
                 case_store=case_store,
+                case_context=case_context,
             )
         result = last or {}
         result["plan"] = local_plan

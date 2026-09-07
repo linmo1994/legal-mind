@@ -7,7 +7,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "server"))
 
 from agents.intent_gate import (  # noqa: E402
-    NON_LEGAL_CLOSING,
     classify_domain_intent,
     parse_gate_payload,
 )
@@ -34,9 +33,6 @@ class TestIntentGate(unittest.TestCase):
         out = classify_domain_intent(llm, "今天天气怎么样")
         self.assertEqual(out["domain"], "non_legal")
         self.assertEqual(len(calls), 1)
-
-    def test_non_legal_closing_constant(self):
-        self.assertIn("更擅长", NON_LEGAL_CLOSING)
 
 
 if __name__ == "__main__":

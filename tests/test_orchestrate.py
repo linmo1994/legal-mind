@@ -428,7 +428,7 @@ class TestOrchestrator(unittest.TestCase):
             skills=[],
         )
         self.assertFalse(retrieve_calls)
-        self.assertIn("更擅长", result["visible_text"])
+        self.assertNotIn("更擅长", result["visible_text"])
         self.assertIn("今天适合出门", result["visible_text"])
         self.assertEqual(result.get("plan", {}).get("intent"), "non_legal")
         self.assertEqual(result.get("citations") or [], [])
@@ -547,18 +547,19 @@ class TestOrchestrator(unittest.TestCase):
             fs.get_file_text.side_effect = lambda fid: get_file(fid).get("text_content")
             case_ctx = build_case_material_context(1, store, fs)
             self.assertIn("【当前案件】", case_ctx)
-            enriched = case_ctx + "\n\n请结合案情帮我分析"
 
             captured = {}
 
             def write_llm(system, user, hist=None):
                 if "意图分类器" in (system or ""):
+                    self.assertNotIn("【当前案件】", user or "")
+                    self.assertIn("请结合案情帮我分析", user or "")
                     return '{"domain":"legal","intent":"legal_analysis"}'
                 captured["user"] = user
                 return "分析结论：请补充还款凭证。"
 
             result = run_orchestrate(
-                user_text=enriched,
+                user_text="请结合案情帮我分析",
                 messages=[],
                 llm=None,
                 retrieve_fn=lambda q, scopes=None: {"laws": "", "cases": ""},
@@ -567,11 +568,84 @@ class TestOrchestrator(unittest.TestCase):
                 write_llm=write_llm,
                 case_id=1,
                 case_store=store,
+                case_context=case_ctx,
             )
             self.assertIn("【当前案件】", captured.get("user") or "")
             self.assertIn("合同正文内容", captured.get("user") or "")
             self.assertNotIn("长正文不应注入", captured.get("user") or "")
             self.assertIn("分析结论", result.get("visible_text") or "")
+        finally:
+            os.environ.pop("PLAN_EXECUTE", None)
+
+    def test_introduce_case_with_complaint_in_materials_does_not_draft(self):
+        """Case docket containing 起诉状 must not hijack '介绍案情' into draft_doc."""
+        from unittest.mock import MagicMock
+
+        from case_materials import build_case_material_context
+
+        os.environ["PLAN_EXECUTE"] = "1"
+        try:
+            store = MagicMock()
+            store.get_case.return_value = {
+                "id": 1,
+                "case_no": "A1",
+                "title": "借贷",
+                "meta": {
+                    "case_type": "civil",
+                    "contract_file_ids": ["c1"],
+                    "evidence_file_ids": [],
+                },
+            }
+            fs = MagicMock()
+            fs.get_file.return_value = {
+                "file_id": "c1",
+                "original_name": "起诉状.pdf",
+                "file_type": "pdf",
+                "text_content": "民事起诉状\n原告张三诉被告李四",
+                "metadata": {},
+            }
+            fs.get_file_text.side_effect = lambda fid: fs.get_file(fid).get("text_content")
+            case_ctx = build_case_material_context(1, store, fs) + "\n起诉状样本：民事起诉状\n"
+            self.assertIn("起诉状", case_ctx)
+
+            captured = {}
+
+            def write_llm(system, user, hist=None):
+                if "意图分类器" in (system or ""):
+                    self.assertNotIn("【当前案件】", user or "")
+                    self.assertNotIn("民事起诉状", user or "")
+                    self.assertIn("请介绍下案情", user or "")
+                    return '{"domain":"legal","intent":"legal_analysis"}'
+                if "规划助手" in (system or "") or "步骤列表" in (system or ""):
+                    captured["plan_user"] = user
+                    return '{"plan":["梳理并介绍本案案情要点"]}'
+                if "选一个工具" in (system or ""):
+                    captured["exec_user"] = user
+                    self.assertIn("请介绍下案情", user or "")
+                    return '{"tool":"reason","args":{"prompt":"介绍案情"}}'
+                if "收口助手" in (system or ""):
+                    return '{"action":"response","response":"本案系民间借贷纠纷，要点如下……"}'
+                # reason tool / other
+                return "本案系民间借贷纠纷，要点如下……"
+
+            result = run_orchestrate(
+                user_text="请介绍下案情",
+                messages=[],
+                llm=None,
+                retrieve_fn=lambda q, scopes=None: {"laws": "", "cases": ""},
+                file_service=fs,
+                skills=[],
+                write_llm=write_llm,
+                case_id=1,
+                case_store=store,
+                case_context=case_ctx,
+            )
+            self.assertIn("民间借贷", result.get("visible_text") or "")
+            self.assertNotIn("已起草", result.get("visible_text") or "")
+            self.assertNotEqual(result.get("agent"), "doc_writing")
+            blob = (captured.get("plan_user") or "") + (captured.get("exec_user") or "")
+            self.assertIn("【用户请求】", blob)
+            self.assertIn("请介绍下案情", blob)
         finally:
             os.environ.pop("PLAN_EXECUTE", None)
 
@@ -653,6 +727,7 @@ class TestOrchestrator(unittest.TestCase):
 
         def fake_run(**kwargs):
             captured["user_text"] = kwargs.get("user_text")
+            captured["case_context"] = kwargs.get("case_context")
             captured["case_id"] = kwargs.get("case_id")
             captured["case_store"] = kwargs.get("case_store")
             return {"visible_text": "ok", "agent": "text_analysis"}
@@ -666,8 +741,9 @@ class TestOrchestrator(unittest.TestCase):
                 {"user_text": "请帮我分析本案", "case_id": 7, "session_id": "s1"},
             )
 
-        self.assertIn("【当前案件】", captured.get("user_text") or "")
-        self.assertIn("请帮我分析本案", captured.get("user_text") or "")
+        self.assertEqual(captured.get("user_text"), "请帮我分析本案")
+        self.assertIn("【当前案件】", captured.get("case_context") or "")
+        self.assertNotIn("【当前案件】", captured.get("user_text") or "")
         self.assertEqual(captured.get("case_id"), 7)
         self.assertIs(captured.get("case_store"), store)
         session.add_message.assert_any_call("s1", "user", "请帮我分析本案")

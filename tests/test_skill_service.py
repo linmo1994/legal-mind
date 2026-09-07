@@ -54,7 +54,59 @@ class TestSkillService(unittest.TestCase):
         svc.delete("case-split")
         self.assertEqual(svc.list_skills(), [])
 
-    def test_match_user_text(self):
+    def test_update_persists_all_critical_fields(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        svc = SkillService(tmp)
+        svc.create({
+            "id": "persist-me",
+            "name": "旧名",
+            "description": "旧描述",
+            "applies_to": ["text_analysis"],
+            "body": "旧正文第一行\n第二行",
+        })
+        updated = svc.update("persist-me", {
+            "name": "新名称",
+            "description": "新描述 含:冒号",
+            "applies_to": ["doc_writing", "orchestrator"],
+            "body": "新正文\n含 --- 分隔线\n第三行 <tag>",
+        })
+        self.assertEqual(updated["name"], "新名称")
+        self.assertEqual(updated["description"], "新描述 含:冒号")
+        self.assertEqual(updated["applies_to"], ["doc_writing", "orchestrator"])
+        self.assertIn("新正文", updated["body"])
+        self.assertIn("---", updated["body"])
+        self.assertIn("<tag>", updated["body"])
+        again = svc.get("persist-me")
+        self.assertEqual(again["body"], updated["body"])
+        self.assertEqual(again["name"], "新名称")
+
+    def test_update_allows_clearing_body_and_applies(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        svc = SkillService(tmp)
+        svc.create({
+            "id": "clear-me",
+            "name": "X",
+            "description": "D",
+            "applies_to": ["text_analysis"],
+            "body": "keep?",
+        })
+        svc.update("clear-me", {"body": "", "applies_to": [], "description": ""})
+        got = svc.get("clear-me")
+        self.assertEqual(got["body"], "")
+        self.assertEqual(got["applies_to"], [])
+        self.assertEqual(got["description"], "")
+
+    def test_multiline_description_normalized(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        svc = SkillService(tmp)
+        svc.create({"id": "ml", "name": "N", "description": "a", "applies_to": [], "body": "B1"})
+        svc.update("ml", {"description": "line1\nline2", "body": "B2"})
+        got = svc.get("ml")
+        self.assertEqual(got["description"], "line1 line2")
+        self.assertEqual(got["body"], "B2")
         tmp = tempfile.mkdtemp()
         self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
         svc = SkillService(tmp)

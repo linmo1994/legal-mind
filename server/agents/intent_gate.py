@@ -13,10 +13,6 @@ LEGAL_INTENTS = (
     "legal_analysis",
 )
 
-NON_LEGAL_CLOSING = (
-    "另外说明：我更擅长解答法律法规、类案检索与法律文书相关问题，有这类需求随时问我。"
-)
-
 CLASSIFY_SYSTEM = """你是意图分类器。只输出一个 JSON 对象，不要其它文字。
 非法律问题：{"domain":"non_legal"}
 法律相关（法规/类案/文书/合同审查/案情分析）：{"domain":"legal","intent":"<枚举>"}

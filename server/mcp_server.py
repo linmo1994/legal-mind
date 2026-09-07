@@ -3356,6 +3356,11 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 created = svc.create(self._read_json_body())
                 self._write_json(201, created)
                 return
+            if method == 'POST' and sid:
+                # Allow POST /api/skills/{id} as update (same as PUT) for clients that cannot PUT.
+                updated = svc.update(sid, self._read_json_body())
+                self._write_json(200, updated)
+                return
             if method == 'PUT' and sid:
                 updated = svc.update(sid, self._read_json_body())
                 self._write_json(200, updated)

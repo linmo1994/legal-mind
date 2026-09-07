@@ -45,16 +45,17 @@
         '<label>名称</label><input id="skillName" required value="' + UI.esc(v.name || "") + '">' +
         '<label>描述（用于何时加载）</label><input id="skillDesc" value="' + UI.esc(v.description || "") + '">' +
         '<label>适用于（逗号分隔）</label><input id="skillApplies" value="' + UI.esc((v.applies_to || []).join(", ")) + '">' +
-        '<label>技能正文</label><textarea id="skillBody" rows="10">' + UI.esc(v.body || "") + "</textarea></form>";
+        '<label>技能正文</label><textarea id="skillBody" rows="14">' + UI.esc(v.body || "") + "</textarea></form>";
     }
 
     function readSkillForm() {
+      const bodyEl = document.getElementById("skillBody");
       return {
         id: document.getElementById("skillId").value.trim(),
         name: document.getElementById("skillName").value.trim(),
         description: document.getElementById("skillDesc").value.trim(),
         applies_to: document.getElementById("skillApplies").value.split(",").map(function (s) { return s.trim(); }).filter(Boolean),
-        body: document.getElementById("skillBody").value
+        body: bodyEl ? bodyEl.value : ""
       };
     }
 
@@ -80,23 +81,47 @@
         footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
           '<button type="button" class="btn-primary" id="btnSave">保存</button>',
         onReady: function () {
-          document.getElementById("btnSave").onclick = async function () {
+          const form = document.getElementById("skillForm");
+          async function saveSkill(ev) {
+            if (ev && ev.preventDefault) ev.preventDefault();
             const payload = readSkillForm();
+            if (!payload.id || !payload.name) {
+              UI.toast("请填写标识和名称", false);
+              return;
+            }
             const base = await UI.apiBase();
-            const url = existing ? base + "/api/skills/" + encodeURIComponent(payload.id) : base + "/api/skills";
-            const resp = await fetch(url, {
-              method: existing ? "PUT" : "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload)
-            });
+            const url = existing
+              ? base + "/api/skills/" + encodeURIComponent(payload.id)
+              : base + "/api/skills";
+            let resp;
+            try {
+              resp = await fetch(url, {
+                method: existing ? "PUT" : "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              });
+            } catch (err) {
+              UI.toast("保存失败：" + (err && err.message ? err.message : String(err)), false);
+              return;
+            }
+            const data = await resp.json().catch(function () { return {}; });
             if (!resp.ok) {
-              UI.toast("保存失败", false);
+              UI.toast((data && data.error) || "保存失败", false);
+              return;
+            }
+            // Confirm critical fields round-tripped (especially body).
+            if (existing && data && typeof data.body === "string" && data.body !== payload.body) {
+              UI.toast("保存异常：正文未正确写回", false);
               return;
             }
             UI.toast("已保存");
             UI.closeDrawer();
             loadList();
-          };
+          }
+          document.getElementById("btnSave").onclick = saveSkill;
+          if (form) {
+            form.addEventListener("submit", saveSkill);
+          }
         }
       });
     }

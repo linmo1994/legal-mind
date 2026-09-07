@@ -39,13 +39,25 @@ def parse_skill_markdown(text: str) -> Tuple[Dict[str, Any], str]:
     return meta, body
 
 
+def _one_line(value: str) -> str:
+    """Front-matter values must be single-line for the simple parser."""
+    return " ".join(str(value or "").replace("\r", "\n").split())
+
+
 def _dump_skill_markdown(name: str, description: str, applies_to: List[str], body: str) -> str:
-    lines = ["---", f"name: {name}", f"description: {description}", "applies_to:"]
+    lines = [
+        "---",
+        f"name: {_one_line(name)}",
+        f"description: {_one_line(description)}",
+        "applies_to:",
+    ]
     for item in applies_to or []:
-        lines.append(f"  - {item}")
+        item_s = _one_line(item)
+        if item_s:
+            lines.append(f"  - {item_s}")
     lines.append("---")
     lines.append("")
-    lines.append(body.rstrip())
+    lines.append((body or "").rstrip())
     lines.append("")
     return "\n".join(lines)
 
@@ -108,7 +120,10 @@ class SkillService:
 
     def update(self, skill_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         current = self._read(skill_id)
-        current.update({k: v for k, v in payload.items() if v is not None and k != "id"})
+        # Merge editable fields; allow empty string / empty list (only skip missing keys / null).
+        for key in ("name", "description", "applies_to", "body"):
+            if key in payload and payload[key] is not None:
+                current[key] = payload[key]
         md = _dump_skill_markdown(
             current.get("name") or skill_id,
             current.get("description") or "",

@@ -589,13 +589,9 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
             )
         except Exception as exc:
             print(f"[orchestrate] case materials failed: {exc}")
-    enriched = user_text
-    if case_ctx:
-        enriched = case_ctx + "\n\n" + (user_text or "")
-
     try:
         result = run_orchestrate(
-            user_text=enriched,
+            user_text=user_text,
             messages=messages,
             llm=None,
             retrieve_fn=retrieve_fn,
@@ -609,6 +605,7 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
             case_scope=case_scope,
             permitted_case_ids=permitted_case_ids,
             resume_state=body.get("resume_state"),
+            case_context=case_ctx or "",
         )
     finally:
         reset_workflow(token)

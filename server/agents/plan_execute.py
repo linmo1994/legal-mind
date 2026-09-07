@@ -28,7 +28,9 @@ _RETRIEVE_GUIDANCE = (
 )
 
 PLANNER_SYSTEM = (
-    "你是法律任务规划助手（planner）。根据用户目标产出可执行的步骤列表。"
+    "你是法律任务规划助手（planner）。根据【用户请求】产出可执行的步骤列表。"
+    "若另附案件材料，仅作背景；不要仅因材料中出现起诉状/文书等词就安排起草文书；"
+    "用户只要求介绍/梳理案情时，安排分析或整理，不要 draft_doc。"
     "只输出 JSON：{\"plan\":[\"步骤1\", ...]}，步骤为自然语言，长度 1–8。"
     + _NO_CASE_GUIDANCE
     + _RETRIEVE_GUIDANCE
@@ -37,6 +39,8 @@ PLANNER_SYSTEM = (
 EXECUTOR_SYSTEM = (
     "你是法律步骤执行器（executor）。根据当前步骤选一个工具并给出参数。"
     f"可用工具：{', '.join(TOOL_NAMES)}。"
+    "以【用户请求】为准；案件材料仅为背景。"
+    "用户只要介绍/梳理案情时，优先 reason，不要选 draft_doc。"
     "只输出 JSON：{\"tool\":\"工具名\",\"args\":{...}}。"
     "若当前步骤是检索法规，选择 retrieve_law；检索类案则 retrieve_case；"
     "用户目标若是查找案例/类案，不要选择 retrieve_law；若是查找法条/某法第×条，不要选择 retrieve_case。"
@@ -454,6 +458,7 @@ def _complete_with_optional_auto_draft(
     status: str = "complete",
 ) -> Dict[str, Any]:
     """Budget/empty-plan wrap; force draft_doc first when doc export is owed."""
+    case_context = str(tool_ctx.get("case_context") or "")
     if _should_auto_draft_doc(
         objective, past_steps, last_artifact, user_supplement=user_supplement
     ):
@@ -471,10 +476,17 @@ def _complete_with_optional_auto_draft(
         text = (
             f"已起草《{title}》。请在下方卡片中下载 Word 核阅后使用。\n\n{obs}"
             if last_artifact and obs
-            else (obs or _force_wrap_response(write_llm, objective, past_steps, messages))
+            else (
+                obs
+                or _force_wrap_response(
+                    write_llm, objective, past_steps, messages, case_context=case_context
+                )
+            )
         )
     else:
-        text = _force_wrap_response(write_llm, objective, past_steps, messages)
+        text = _force_wrap_response(
+            write_llm, objective, past_steps, messages, case_context=case_context
+        )
     return _result(
         status=status,
         visible_text=text,
@@ -575,8 +587,11 @@ def _plan_llm(
     objective: str,
     messages,
     max_plan_steps: int,
+    case_context: str = "",
 ) -> List[str]:
-    user = f"目标：{objective}"
+    from case_materials import format_user_with_case_context
+
+    user = f"目标：\n{format_user_with_case_context(objective, case_context)}"
     data = _llm_json(write_llm, PLANNER_SYSTEM, user, messages)
     plan = _normalize_plan((data or {}).get("plan"), max_plan_steps)
     if plan:
@@ -590,8 +605,14 @@ def _exec_llm(
     step: str,
     objective: str,
     messages,
+    case_context: str = "",
 ) -> Dict[str, Any]:
-    user = f"目标：{objective}\n当前步骤：{step}\n请选择恰好一个工具。"
+    from case_materials import format_user_with_case_context
+
+    user = (
+        f"目标：\n{format_user_with_case_context(objective, case_context)}\n"
+        f"当前步骤：{step}\n请选择恰好一个工具。"
+    )
     data = _llm_json(write_llm, EXECUTOR_SYSTEM, user, messages)
     if data and data.get("tool"):
         args = data.get("args") if isinstance(data.get("args"), dict) else {}
@@ -612,10 +633,13 @@ def _replan_llm(
     max_replans: int,
     max_plan_steps: int,
     user_supplement: str = "",
+    case_context: str = "",
 ) -> Dict[str, Any]:
+    from case_materials import format_user_with_case_context
+
     past_txt = json.dumps(past_steps, ensure_ascii=False)[:4000]
     user = (
-        f"目标：{objective}\n"
+        f"目标：\n{format_user_with_case_context(objective, case_context)}\n"
         f"{'用户补充：' + user_supplement + chr(10) if user_supplement else ''}"
         f"已执行：{past_txt}\n"
         f"剩余计划：{plan}\n"
@@ -654,9 +678,15 @@ def _force_wrap_response(
     objective: str,
     past_steps: List[Dict[str, Any]],
     messages,
+    case_context: str = "",
 ) -> str:
+    from case_materials import format_user_with_case_context
+
     past_txt = json.dumps(past_steps, ensure_ascii=False)[:4000]
-    user = f"目标：{objective}\n已执行步骤：{past_txt}\n请给出最终答复。"
+    user = (
+        f"目标：\n{format_user_with_case_context(objective, case_context)}\n"
+        f"已执行步骤：{past_txt}\n请给出最终答复。"
+    )
     raw = _call_llm(write_llm, WRAP_SYSTEM, user, messages)
     data = _extract_json(raw) or {}
     if data.get("action") == "response" or data.get("response"):
@@ -742,6 +772,7 @@ def run_plan_execute(
     skills=None,
     session_id=None,
     resume_state=None,
+    case_context: str = "",
     max_plan_steps: int = MAX_PLAN_STEPS,
     max_replans: int = MAX_REPLANS,
     max_tool_calls: int = MAX_TOOL_CALLS,
@@ -752,6 +783,7 @@ def run_plan_execute(
     user_supplement = ""
     external_search = None
     last_artifact: Optional[Dict[str, Any]] = None
+    case_context = case_context or ""
 
     # Tool-internal LLM calls (e.g. reason) must not be mistaken for replanner by
     # scripted fakes that key off non-planner/non-executor system prompts.
@@ -770,6 +802,7 @@ def run_plan_execute(
         "case_store": case_store,
         "messages": messages,
         "objective": objective,
+        "case_context": case_context,
         "skills": skills,
         "session_id": session_id,
     }
@@ -813,6 +846,7 @@ def run_plan_execute(
             max_replans,
             max_plan_steps,
             user_supplement=user_supplement,
+            case_context=case_context,
         )
         replan_count += 1
         action = decision.get("action")
@@ -845,7 +879,9 @@ def run_plan_execute(
         past_steps = []
         tool_calls_used = 0
         replan_count = 0
-        plan = _plan_llm(write_llm, objective, messages, max_plan_steps)
+        plan = _plan_llm(
+            write_llm, objective, messages, max_plan_steps, case_context=case_context
+        )
         plan = _ensure_retrieve_steps(
             objective, plan, past_steps, max_steps=max_plan_steps
         )
@@ -886,7 +922,9 @@ def run_plan_execute(
             )
 
         step = plan[0]
-        choice = _exec_llm(write_llm, step, objective, messages)
+        choice = _exec_llm(
+            write_llm, step, objective, messages, case_context=case_context
+        )
         tool_name = str(choice.get("tool") or "reason")
         tool_args = choice.get("args") if isinstance(choice.get("args"), dict) else {}
         step_id = tool_name or str(tool_calls_used)
@@ -967,6 +1005,7 @@ def run_plan_execute(
             max_replans,
             max_plan_steps,
             user_supplement=user_supplement,
+            case_context=case_context,
         )
         replan_count += 1
         action = decision.get("action")

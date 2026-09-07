@@ -340,6 +340,11 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
 
     if name == "draft_doc":
         prompt = str(args.get("prompt") or args.get("instruction") or ctx.get("objective") or "")
+        case_context = str(ctx.get("case_context") or "")
+        if case_context:
+            from case_materials import format_user_with_case_context
+
+            prompt = format_user_with_case_context(prompt, case_context)
         if not write_llm:
             return {"observation": "write_llm unavailable for draft_doc", "citations": []}
         skills = ctx.get("skills")
@@ -382,6 +387,11 @@ def run_tool(name: str, args: Optional[Dict[str, Any]], ctx: Optional[Dict[str, 
 
     if name == "reason":
         prompt = str(args.get("prompt") or args.get("instruction") or ctx.get("objective") or "")
+        case_context = str(ctx.get("case_context") or "")
+        if case_context:
+            from case_materials import format_user_with_case_context
+
+            prompt = format_user_with_case_context(prompt, case_context)
         if not write_llm:
             return {"observation": "(no write_llm) " + prompt, "citations": []}
         system = "你是法律分析助手。根据给定步骤要求给出简明推理或结论，引用须基于已提供材料。"

@@ -7,6 +7,7 @@ from case_materials import (
     allow_case_material_access,
     build_case_material_context,
     ensure_evidence_briefs,
+    format_user_with_case_context,
     generate_evidence_brief,
     get_case_evidence_text,
     parse_evidence_tool_call,
@@ -116,6 +117,17 @@ class TestCaseMaterials(unittest.TestCase):
             built = build_case_material_context(1, store, fs)
         self.assertIsNone(built)
         store.get_case.assert_not_called()
+
+    def test_format_user_with_case_context_keeps_request_separate(self):
+        out = format_user_with_case_context(
+            "请介绍下案情",
+            "【当前案件】\n民事起诉状正文……",
+        )
+        self.assertIn("【用户请求】", out)
+        self.assertIn("请介绍下案情", out)
+        self.assertIn("仅作背景", out)
+        self.assertIn("民事起诉状", out)
+        self.assertEqual(format_user_with_case_context("只问一句", ""), "只问一句")
 
     def test_allow_case_material_access_ok_and_no_case(self):
         api = MagicMock()

@@ -258,6 +258,21 @@ class TestPlanExecute(unittest.TestCase):
         self.assertEqual(art.get("file_id"), "pe-doc-1")
         self.assertTrue(str(art.get("filename") or "").endswith(".docx"))
 
+    def test_introduce_case_objective_does_not_auto_draft_despite_complaint_in_context(self):
+        from agents.plan_execute import _should_auto_draft_doc, _wants_legal_doc
+
+        self.assertFalse(_wants_legal_doc("请介绍下案情"))
+        self.assertTrue(_wants_legal_doc("请写一份民事起诉状"))
+        # Auto-draft must key off objective only — materials stay out of objective.
+        self.assertFalse(
+            _should_auto_draft_doc(
+                "请介绍下案情",
+                past_steps=[],
+                last_artifact=None,
+                user_supplement="",
+            )
+        )
+
     def test_auto_draft_when_ask_user_despite_export_intent(self):
         """Model may ask for case; with 导出文书 we still force draft_doc + artifact."""
         class FakeFS:
