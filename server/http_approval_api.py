@@ -28,6 +28,8 @@ def parse_approval_path(path: str, method: str) -> ApprovalRoute:
         return ("create_artifact", None)
     if path == "/api/approvals/inbox" and method == "GET":
         return ("inbox", None)
+    if path == "/api/approvals/workbench" and method == "GET":
+        return ("workbench", None)
     if path == "/api/audit" and method == "GET":
         return ("audit", None)
 
@@ -44,6 +46,15 @@ def parse_approval_path(path: str, method: str) -> ApprovalRoute:
         parts = path.split("/")
         if len(parts) == 5:
             return ("decide", parts[3])
+
+    if (
+        path.startswith("/api/approvals/rejects/")
+        and path.endswith("/ack")
+        and method == "POST"
+    ):
+        parts = path.split("/")
+        if len(parts) == 6:
+            return ("ack_reject", parts[4])
 
     return (None, None)
 
@@ -259,3 +270,79 @@ class ApprovalHttpApi:
 
         events = self.approval_store.list_audit(case_id=case_id)
         return _ok({"events": events})
+
+    def workbench(
+        self, authorization: Optional[str], *, badge_only: bool = False
+    ) -> StatusPayload:
+        gated = self.require_user(authorization)
+        if gated[0] != 200:
+            return gated
+        user = gated[1]["user"]
+        uid = int(user["id"])
+
+        pending = self.approval_store.list_open_tasks_for_user(uid)
+        rejected_rows = self.approval_store.list_rejected_for_creator(uid)
+        rejected_mine = []
+        unacked = 0
+        for art in rejected_rows:
+            ack = self.approval_store.is_rejection_acked(uid, int(art["id"]))
+            if not ack:
+                unacked += 1
+            case = self.store.get_case(int(art["case_id"])) or {}
+            rejected_mine.append(
+                {
+                    "artifact_id": art["id"],
+                    "case_id": art["case_id"],
+                    "case_no": case.get("case_no"),
+                    "title": art.get("title"),
+                    "reject_comment": art.get("reject_comment"),
+                    "updated_at": art.get("updated_at"),
+                    "file_id": art.get("file_id"),
+                    "ack": ack,
+                }
+            )
+        badge_count = len(pending) + unacked
+        if badge_only:
+            return _ok({"badge_count": badge_count})
+
+        cases = self.store.list_cases_for_user(uid, all_cases=False)
+        my_cases = []
+        for c in cases:
+            role = self.store.case_role_code(uid, int(c["id"]))
+            member = self.store.get_case_member(int(c["id"]), uid) or {}
+            my_cases.append(
+                {
+                    "id": c["id"],
+                    "case_no": c.get("case_no"),
+                    "title": c.get("title"),
+                    "stage": c.get("stage") or c.get("status"),
+                    "stage_label": c.get("stage_label") or c.get("status_label") or "",
+                    "my_role": role,
+                    "my_role_label": member.get("role_name") or role or "",
+                }
+            )
+        return _ok(
+            {
+                "pending_tasks": pending,
+                "rejected_mine": rejected_mine,
+                "my_cases": my_cases,
+                "badge_count": badge_count,
+            }
+        )
+
+    def ack_reject(
+        self, authorization: Optional[str], artifact_id: int
+    ) -> StatusPayload:
+        gated = self.require_user(authorization)
+        if gated[0] != 200:
+            return gated
+        user = gated[1]["user"]
+        art = self.approval_store.get_artifact(artifact_id)
+        if not art:
+            return _deny(404, "文书不存在")
+        if art.get("created_by") is None or int(art["created_by"]) != int(user["id"]):
+            return _deny(403, "仅发起人可确认驳回")
+        if art.get("approval_status") != "draft" or not (art.get("reject_comment") or "").strip():
+            return _deny(400, "文书当前不是被驳回草稿")
+        self.approval_store.ack_rejection(int(user["id"]), artifact_id)
+        return _ok({"ok": True})

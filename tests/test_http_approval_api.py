@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
 from approval_store import ApprovalStore
 from auth_service import AuthService
-from http_approval_api import ApprovalHttpApi
+from http_approval_api import ApprovalHttpApi, parse_approval_path
 from http_rbac_api import RbacHttpApi
 from rbac_service import RbacService
 from rbac_store import RbacStore
@@ -238,6 +238,86 @@ class TestHttpApprovalApi(unittest.TestCase):
         self.assertIn("artifact_created", actions)
         self.assertIn("artifact_submit", actions)
         self.assertIn("approval_approve", actions)
+
+    def test_workbench_badge_and_ack(self):
+        assistant_hdr = self._login("a_appr")
+        lead_hdr = self._login("l_appr")
+
+        st, created = self.api.create_artifact(
+            assistant_hdr,
+            {
+                "case_id": self._case_id,
+                "file_id": "f-workbench",
+                "title": "起诉状",
+                "doc_type": "起诉状",
+            },
+        )
+        self.assertEqual(st, 201)
+        artifact_id = created["artifact"]["id"]
+
+        st, submitted = self.api.submit_artifact(assistant_hdr, artifact_id)
+        self.assertEqual(st, 200)
+        self.assertEqual(submitted["artifact"]["approval_status"], "pending_lead")
+
+        lead_task_id = self.api.inbox(lead_hdr)[1]["tasks"][0]["id"]
+        st, rejected = self.api.decide(
+            lead_hdr, lead_task_id, {"decision": "reject", "comment": "格式不对"}
+        )
+        self.assertEqual(st, 200)
+        self.assertEqual(rejected["artifact"]["approval_status"], "draft")
+
+        st, wb = self.api.workbench(assistant_hdr)
+        self.assertEqual(st, 200)
+        self.assertGreaterEqual(len(wb["rejected_mine"]), 1)
+        self.assertFalse(wb["rejected_mine"][0]["ack"])
+        self.assertGreaterEqual(wb["badge_count"], 1)
+        self.assertTrue(any(c["id"] == self._case_id for c in wb["my_cases"]))
+        badge_before_ack = wb["badge_count"]
+
+        aid = wb["rejected_mine"][0]["artifact_id"]
+        st, ack_body = self.api.ack_reject(assistant_hdr, aid)
+        self.assertEqual(st, 200)
+        self.assertTrue(ack_body["ok"])
+
+        st, wb2 = self.api.workbench(assistant_hdr)
+        self.assertEqual(st, 200)
+        item = next(x for x in wb2["rejected_mine"] if x["artifact_id"] == aid)
+        self.assertTrue(item["ack"])
+        self.assertEqual(wb2["badge_count"], badge_before_ack - 1)
+
+    def test_workbench_badge_only(self):
+        assistant_hdr = self._login("a_appr")
+        lead_hdr = self._login("l_appr")
+
+        st, created = self.api.create_artifact(
+            assistant_hdr,
+            {
+                "case_id": self._case_id,
+                "file_id": "f-badge-only",
+                "title": "起诉状",
+                "doc_type": "起诉状",
+            },
+        )
+        self.assertEqual(st, 201)
+        artifact_id = created["artifact"]["id"]
+        self.api.submit_artifact(assistant_hdr, artifact_id)
+        lead_task_id = self.api.inbox(lead_hdr)[1]["tasks"][0]["id"]
+        self.api.decide(lead_hdr, lead_task_id, {"decision": "reject", "comment": "需修改"})
+
+        st, wb = self.api.workbench(assistant_hdr, badge_only=True)
+        self.assertEqual(st, 200)
+        self.assertEqual(set(wb.keys()), {"badge_count"})
+        self.assertGreaterEqual(wb["badge_count"], 1)
+
+    def test_parse_approval_path_workbench_routes(self):
+        self.assertEqual(
+            parse_approval_path("/api/approvals/workbench", "GET"),
+            ("workbench", None),
+        )
+        self.assertEqual(
+            parse_approval_path("/api/approvals/rejects/42/ack", "POST"),
+            ("ack_reject", "42"),
+        )
 
 
 if __name__ == "__main__":
