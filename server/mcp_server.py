@@ -1334,6 +1334,9 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         if path.startswith('/api/approvals/') and path.endswith('/decide'):
             self._handle_approval_api('POST')
             return
+        if path.startswith('/api/approvals/rejects/') and path.endswith('/ack'):
+            self._handle_approval_api('POST')
+            return
         if path == '/api/admin/clients' or path.startswith('/api/admin/clients/'):
             self._handle_rbac_api('POST')
             return
@@ -2449,7 +2452,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             self._handle_rbac_api('GET')
         elif path == '/api/artifacts' or path.startswith('/api/artifacts/'):
             self._handle_approval_api('GET')
-        elif path == '/api/approvals/inbox':
+        elif path == '/api/approvals/inbox' or path == '/api/approvals/workbench':
             self._handle_approval_api('GET')
         elif path == '/api/audit':
             self._handle_approval_api('GET')
@@ -3527,6 +3530,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 return
             if action == "inbox":
                 self._write_json(*api.inbox(authz))
+                return
+            if action == "workbench":
+                badge_only = (qs.get("badge_only", ["0"])[0] in ("1", "true", "yes"))
+                self._write_json(*api.workbench(authz, badge_only=badge_only))
+                return
+            if action == "ack_reject" and resource_id:
+                self._write_json(*api.ack_reject(authz, int(resource_id)))
                 return
             if action == "decide" and resource_id:
                 self._write_json(*api.decide(authz, int(resource_id), body))
