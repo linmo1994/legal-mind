@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>我的待办 - LegalMind</title>
+  <link rel="stylesheet" href="admin.css">
+  <style>
+    .approvals-page { max-width: 960px; margin: 0 auto; padding: 24px 20px 48px; }
+    .approvals-page h1 { margin: 0 0 8px; font-size: 1.5rem; }
+    .approvals-page .muted { color: #64748b; font-size: 0.95rem; }
+    .workbench-section { margin-top: 32px; }
+    .workbench-section h2 { margin: 0 0 8px; font-size: 1.15rem; }
+    .workbench-section .section-desc { margin: 0 0 12px; }
+    .admin-table { width: 100%; margin-top: 8px; border-collapse: collapse; background: #fff; }
+    .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 10px 12px; text-align: left; font-size: 14px; vertical-align: top; }
+    .admin-table th { background: #f8fafc; }
+    .status-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+      background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
+    }
+    .reject-comment { max-width: 280px; white-space: pre-wrap; word-break: break-word; color: #7f1d1d; }
+    .row-actions { white-space: nowrap; }
+    .row-actions button { margin-right: 6px; margin-bottom: 4px; }
+    .form-grid label { display: block; margin: 10px 0 4px; font-size: 13px; }
+    .form-grid textarea { width: 100%; min-height: 96px; padding: 8px; box-sizing: border-box; resize: vertical; }
+    .status-err { color: #b91c1c; }
+    .empty-hint { margin: 8px 0 0; padding: 16px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; text-align: center; }
+  </style>
+</head>
+<body class="admin-body">
+  <div class="approvals-page">
+    <h1>我的待办</h1>
+    <p class="muted">待审文书、被驳回需处理的文书，以及与您相关的案件。无需进入管理后台。</p>
+    <p id="status" class="muted"></p>
+
+    <section class="workbench-section" id="sectionPending">
+      <h2>待我审批</h2>
+      <p class="muted section-desc">指派给您的待审文书。通过后将进入下一环节或定稿；驳回须填写意见。</p>
+      <p id="emptyPending" class="empty-hint muted" hidden>暂无待审批事项。</p>
+      <table class="admin-table" id="tblPending" hidden>
+        <thead>
+          <tr>
+            <th>案件号</th>
+            <th>文书标题</th>
+            <th>审批步骤</th>
+            <th>提交时间</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="workbench-section" id="sectionRejected">
+      <h2>需我处理（被驳回）</h2>
+      <p class="muted section-desc">您提交的文书被驳回，请查看意见后修改并重新提交。</p>
+      <p id="emptyRejected" class="empty-hint muted" hidden>暂无被驳回文书。</p>
+      <table class="admin-table" id="tblRejected" hidden>
+        <thead>
+          <tr>
+            <th>案件号</th>
+            <th>文书标题</th>
+            <th>驳回意见</th>
+            <th>更新时间</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="workbench-section" id="sectionCases">
+      <h2>我的案件</h2>
+      <p class="muted section-desc">与您相关的案件，可一键进入对话并绑案。</p>
+      <p id="emptyCases" class="empty-hint muted" hidden>暂无相关案件。</p>
+      <table class="admin-table" id="tblCases" hidden>
+        <thead>
+          <tr>
+            <th>案件号</th>
+            <th>案件标题</th>
+            <th>阶段</th>
+            <th>我的角色</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </div>
+  <script src="auth.js"></script>
+  <script src="admin_ui.js"></script>
+  <script>
+    let base = "";
+    let caseMap = {};
+
+    const STEP_LABELS = {
+      lead: "主办律师审核",
+      partner: "合伙人审核"
+    };
+
+    function stepLabel(step) {
+      return STEP_LABELS[step] || step || "—";
+    }
+
+    function caseNoFor(task) {
+      const c = caseMap[task.case_id];
+      if (c && c.case_no) return c.case_no;
+      if (task.case_id != null) return "案件 #" + task.case_id;
+      return "—";
+    }
+
+    function formatTime(value) {
+      if (!value) return "—";
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return value;
+      return d.toLocaleString("zh-CN", { hour12: false });
+    }
+
+    function openCaseChat(caseId) {
+      if (window.parent && window.parent !== window && window.parent.loadPage) {
+        window.parent.loadPage("mcp_client.html?case_id=" + encodeURIComponent(caseId));
+      } else {
+        location.href = "mcp_client.html?case_id=" + encodeURIComponent(caseId);
+      }
+    }
+
+    async function api(path, opts) {
+      const resp = await fetch(base + path, Object.assign({ headers: LegalMindAuth.authHeaders() }, opts || {}));
+      const data = await resp.json().catch(function () { return {}; });
+      if (resp.status === 401) { LegalMindAuth.requireLogin("login.html?next=approvals.html"); throw new Error("未登录"); }
+      if (!resp.ok) throw new Error(data.error || ("HTTP " + resp.status));
+      return data;
+    }
+
+    async function loadCaseMap() {
+      try {
+        const data = await api("/api/admin/cases?mine=1");
+        caseMap = {};
+        (data.cases || []).forEach(function (c) {
+          caseMap[c.id] = c;
+        });
+      } catch (e) {
+        caseMap = {};
+      }
+    }
+
+    async function decideTask(task, decision, comment) {
+      await api("/api/approvals/" + encodeURIComponent(task.id) + "/decide", {
+        method: "POST",
+        body: JSON.stringify({ decision: decision, comment: comment || "" })
+      });
+    }
+
+    function approveTask(task) {
+      AdminUI.confirm({
+        title: "通过审批",
+        message: "确认通过「" + (task.artifact_title || "该文书") + "」？",
+        okText: "通过"
+      }).then(async function (ok) {
+        if (!ok) return;
+        await decideTask(task, "approve");
+        AdminUI.toast("已通过", true);
+        await load();
+      }).catch(function (e) {
+        AdminUI.toast(e.message, false);
+      });
+    }
+
+    function rejectTask(task) {
+      AdminUI.openDrawer({
+        title: "驳回审批",
+        body:
+          "<div class=\"form-grid\">" +
+            "<p class=\"muted\">文书：" + AdminUI.esc(task.artifact_title || "—") + "</p>" +
+            "<label class=\"req\">驳回意见</label>" +
+            "<textarea id=\"rejectComment\" placeholder=\"请说明驳回原因（必填）\"></textarea>" +
+          "</div>",
+        footer: '<button type="button" class="btn-ghost" data-close="drawer">取消</button>' +
+          '<button type="button" class="btn-danger-outline" id="rejectSave">确认驳回</button>',
+        onReady: function () {
+          document.getElementById("rejectSave").onclick = async function () {
+            const comment = document.getElementById("rejectComment").value.trim();
+            if (!comment) {
+              AdminUI.toast("请填写驳回意见", false);
+              return;
+            }
+            try {
+              await decideTask(task, "reject", comment);
+              AdminUI.closeDrawer();
+              AdminUI.toast("已驳回", true);
+              await load();
+            } catch (e) {
+              AdminUI.toast(e.message, false);
+            }
+          };
+        }
+      });
+    }
+
+    async function downloadWorkCopy(fileId, title) {
+      if (!fileId) {
+        AdminUI.toast("暂无文件可下载", false);
+        return;
+      }
+      try {
+        const resp = await fetch(base + "/api/files/" + encodeURIComponent(fileId) + "/download", {
+          headers: LegalMindAuth.authHeaders()
+        });
+        if (resp.status === 401) {
+          LegalMindAuth.requireLogin("login.html?next=approvals.html");
+          return;
+        }
+        if (!resp.ok) {
+          const data = await resp.json().catch(function () { return {}; });
+          throw new Error(data.error || ("HTTP " + resp.status));
+        }
+        const blob = await resp.blob();
+        const a = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        a.href = url;
+        a.download = (title || "文书") + "_草稿.docx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        AdminUI.toast(e.message || "下载失败", false);
+      }
+    }
+
+    async function ackReject(item) {
+      try {
+        await api("/api/approvals/rejects/" + encodeURIComponent(item.artifact_id) + "/ack", {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        AdminUI.toast("已确认", true);
+        await load();
+      } catch (e) {
+        AdminUI.toast(e.message, false);
+      }
+    }
+
+    function renderPending(tasks) {
+      const tb = document.querySelector("#tblPending tbody");
+      const tbl = document.getElementById("tblPending");
+      const empty = document.getElementById("emptyPending");
+      tb.innerHTML = "";
+
+      if (!tasks.length) {
+        tbl.hidden = true;
+        empty.hidden = false;
+        return;
+      }
+
+      tbl.hidden = false;
+      empty.hidden = true;
+
+      tasks.forEach(function (task) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + AdminUI.esc(caseNoFor(task)) + "</td>" +
+          "<td>" + AdminUI.esc(task.artifact_title || "—") + "</td>" +
+          '<td><span class="status-pill">' + AdminUI.esc(stepLabel(task.step)) + "</span></td>" +
+          "<td>" + AdminUI.esc(formatTime(task.created_at)) + "</td>" +
+          "<td class='row-actions'></td>";
+
+        const actions = tr.lastChild;
+
+        if (task.file_id) {
+          const viewBtn = document.createElement("button");
+          viewBtn.type = "button";
+          viewBtn.className = "btn-ghost";
+          viewBtn.textContent = "下载工作稿";
+          viewBtn.onclick = function () { downloadWorkCopy(task.file_id, task.artifact_title); };
+          actions.appendChild(viewBtn);
+        }
+
+        const approveBtn = document.createElement("button");
+        approveBtn.type = "button";
+        approveBtn.className = "btn-primary";
+        approveBtn.textContent = "通过";
+        approveBtn.onclick = function () { approveTask(task); };
+        actions.appendChild(approveBtn);
+
+        const rejectBtn = document.createElement("button");
+        rejectBtn.type = "button";
+        rejectBtn.className = "btn-danger-outline";
+        rejectBtn.textContent = "驳回";
+        rejectBtn.onclick = function () { rejectTask(task); };
+        actions.appendChild(rejectBtn);
+
+        tb.appendChild(tr);
+      });
+    }
+
+    function renderRejected(items) {
+      const tb = document.querySelector("#tblRejected tbody");
+      const tbl = document.getElementById("tblRejected");
+      const empty = document.getElementById("emptyRejected");
+      tb.innerHTML = "";
+
+      if (!items.length) {
+        tbl.hidden = true;
+        empty.hidden = false;
+        return;
+      }
+
+      tbl.hidden = false;
+      empty.hidden = true;
+
+      items.forEach(function (item) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + AdminUI.esc(item.case_no || ("案件 #" + item.case_id)) + "</td>" +
+          "<td>" + AdminUI.esc(item.title || "—") + "</td>" +
+          '<td class="reject-comment">' + AdminUI.esc(item.reject_comment || "—") + "</td>" +
+          "<td>" + AdminUI.esc(formatTime(item.updated_at)) + "</td>" +
+          "<td class='row-actions'></td>";
+
+        const actions = tr.lastChild;
+
+        if (item.file_id) {
+          const dlBtn = document.createElement("button");
+          dlBtn.type = "button";
+          dlBtn.className = "btn-ghost";
+          dlBtn.textContent = "下载工作稿";
+          dlBtn.onclick = function () { downloadWorkCopy(item.file_id, item.title); };
+          actions.appendChild(dlBtn);
+        }
+
+        const chatBtn = document.createElement("button");
+        chatBtn.type = "button";
+        chatBtn.className = "btn-primary";
+        chatBtn.textContent = "打开对话";
+        chatBtn.onclick = function () { openCaseChat(item.case_id); };
+        actions.appendChild(chatBtn);
+
+        const ackBtn = document.createElement("button");
+        ackBtn.type = "button";
+        ackBtn.className = "btn-ghost";
+        ackBtn.textContent = "我知道了";
+        ackBtn.onclick = function () { ackReject(item); };
+        actions.appendChild(ackBtn);
+
+        tb.appendChild(tr);
+      });
+    }
+
+    function renderCases(cases) {
+      const tb = document.querySelector("#tblCases tbody");
+      const tbl = document.getElementById("tblCases");
+      const empty = document.getElementById("emptyCases");
+      tb.innerHTML = "";
+
+      if (!cases.length) {
+        tbl.hidden = true;
+        empty.hidden = false;
+        return;
+      }
+
+      tbl.hidden = false;
+      empty.hidden = true;
+
+      cases.forEach(function (c) {
+        const tr = document.createElement("tr");
+        tr.innerHTML =
+          "<td>" + AdminUI.esc(c.case_no || ("案件 #" + c.id)) + "</td>" +
+          "<td>" + AdminUI.esc(c.title || "—") + "</td>" +
+          "<td>" + AdminUI.esc(c.stage_label || c.stage || "—") + "</td>" +
+          "<td>" + AdminUI.esc(c.my_role_label || c.my_role || "—") + "</td>" +
+          "<td class='row-actions'></td>";
+
+        const actions = tr.lastChild;
+        const enterBtn = document.createElement("button");
+        enterBtn.type = "button";
+        enterBtn.className = "btn-primary";
+        enterBtn.textContent = "进入对话";
+        enterBtn.onclick = function () { openCaseChat(c.id); };
+        actions.appendChild(enterBtn);
+
+        tb.appendChild(tr);
+      });
+    }
+
+    async function load() {
+      const data = await api("/api/approvals/workbench");
+      const pending = data.pending_tasks || [];
+      const rejected = data.rejected_mine || [];
+      const cases = data.my_cases || [];
+
+      renderPending(pending);
+      renderRejected(rejected);
+      renderCases(cases);
+
+      const total = pending.length + rejected.length + cases.length;
+      document.getElementById("status").textContent = total
+        ? "待审批 " + pending.length + " · 被驳回 " + rejected.length + " · 我的案件 " + cases.length
+        : "";
+    }
+
+    (async function () {
+      if (!LegalMindAuth.requireLogin("login.html?next=approvals.html")) return;
+      base = await LegalMindAuth.mcpBase();
+      try {
+        await loadCaseMap();
+        await load();
+      } catch (e) {
+        document.getElementById("status").textContent = e.message;
+        document.getElementById("status").className = "status-err";
+      }
+    })();
+  </script>
+</body>
+</html>
