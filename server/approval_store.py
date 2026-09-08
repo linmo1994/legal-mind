@@ -86,6 +86,13 @@ class ApprovalStore:
             );
             CREATE INDEX IF NOT EXISTS idx_audit_events_case
                 ON audit_events(case_id, created_at);
+            CREATE TABLE IF NOT EXISTS rejection_acks (
+                user_id INTEGER NOT NULL,
+                artifact_id INTEGER NOT NULL,
+                acked_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, artifact_id),
+                FOREIGN KEY (artifact_id) REFERENCES doc_artifacts(id) ON DELETE CASCADE
+            );
             """
         )
         conn.commit()
@@ -363,6 +370,7 @@ class ApprovalStore:
                 """,
                 (ARTIFACT_STATUS_DRAFT, comment or None, now, artifact_id),
             )
+            self.clear_rejection_acks_for_artifact(artifact_id, cur=cur)
             conn.commit()
             conn.close()
             self.write_audit(
@@ -441,11 +449,76 @@ class ApprovalStore:
         )
         return self.get_artifact(artifact_id)  # type: ignore[return-value]
 
+    def list_rejected_for_creator(self, user_id: int) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM doc_artifacts
+            WHERE created_by = ?
+              AND approval_status = ?
+              AND reject_comment IS NOT NULL
+              AND TRIM(reject_comment) != ''
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (user_id, ARTIFACT_STATUS_DRAFT),
+        ).fetchall()
+        conn.close()
+        return [self._enrich_artifact(dict(r)) for r in rows]
+
+    def is_rejection_acked(self, user_id: int, artifact_id: int) -> bool:
+        conn = self._connect()
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM rejection_acks
+            WHERE user_id = ? AND artifact_id = ?
+            """,
+            (user_id, artifact_id),
+        ).fetchone()
+        conn.close()
+        return row is not None
+
+    def ack_rejection(self, user_id: int, artifact_id: int) -> None:
+        now = self._now()
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT INTO rejection_acks (user_id, artifact_id, acked_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, artifact_id) DO UPDATE SET acked_at = excluded.acked_at
+            """,
+            (user_id, artifact_id, now),
+        )
+        conn.commit()
+        conn.close()
+
+    def clear_rejection_acks_for_artifact(
+        self,
+        artifact_id: int,
+        *,
+        cur: Optional[sqlite3.Cursor] = None,
+    ) -> None:
+        if cur is not None:
+            cur.execute(
+                "DELETE FROM rejection_acks WHERE artifact_id = ?",
+                (artifact_id,),
+            )
+            return
+
+        conn = self._connect()
+        conn.execute(
+            "DELETE FROM rejection_acks WHERE artifact_id = ?",
+            (artifact_id,),
+        )
+        conn.commit()
+        conn.close()
+
     def list_open_tasks_for_user(self, user_id: int) -> List[Dict[str, Any]]:
         conn = self._connect()
         rows = conn.execute(
             """
-            SELECT t.*, a.title AS artifact_title, a.doc_type, a.approval_status
+            SELECT t.*, a.title AS artifact_title, a.doc_type, a.approval_status, a.file_id
             FROM approval_tasks t
             JOIN doc_artifacts a ON a.id = t.artifact_id
             WHERE t.assignee_user_id = ? AND t.status = ?
