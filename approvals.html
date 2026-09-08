@@ -45,6 +45,10 @@
     .form-grid textarea { width: 100%; min-height: 96px; padding: 8px; box-sizing: border-box; resize: vertical; }
     .status-err { color: #b91c1c; }
     .empty-hint { margin: 8px 0 0; padding: 16px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 8px; text-align: center; }
+    .admin-table .empty-row td {
+      text-align: center; color: #64748b; padding: 28px 12px;
+      background: #f8fafc; border-style: dashed;
+    }
   </style>
 </head>
 <body class="admin-body">
@@ -67,8 +71,7 @@
 
     <section class="workbench-panel" id="panelPending" role="tabpanel" aria-labelledby="tabPending">
       <p class="muted section-desc">指派给您的待审文书。通过后将进入下一环节或定稿；驳回须填写意见。</p>
-      <p id="emptyPending" class="empty-hint muted" hidden>暂无待审批事项。</p>
-      <table class="admin-table" id="tblPending" hidden>
+      <table class="admin-table" id="tblPending">
         <thead>
           <tr>
             <th>案件号</th>
@@ -84,8 +87,7 @@
 
     <section class="workbench-panel" id="panelRejected" role="tabpanel" aria-labelledby="tabRejected" hidden>
       <p class="muted section-desc">您提交的文书被驳回，请查看意见后修改并重新提交。</p>
-      <p id="emptyRejected" class="empty-hint muted" hidden>暂无被驳回文书。</p>
-      <table class="admin-table" id="tblRejected" hidden>
+      <table class="admin-table" id="tblRejected">
         <thead>
           <tr>
             <th>案件号</th>
@@ -101,8 +103,7 @@
 
     <section class="workbench-panel" id="panelCases" role="tabpanel" aria-labelledby="tabCases" hidden>
       <p class="muted section-desc">与您相关的案件，可一键进入对话并绑案。</p>
-      <p id="emptyCases" class="empty-hint muted" hidden>暂无相关案件。</p>
-      <table class="admin-table" id="tblCases" hidden>
+      <table class="admin-table" id="tblCases">
         <thead>
           <tr>
             <th>案件号</th>
@@ -309,20 +310,21 @@
       }
     }
 
+    function renderEmptyRow(tb, colSpan, text) {
+      const tr = document.createElement("tr");
+      tr.className = "empty-row";
+      tr.innerHTML = "<td colspan=\"" + colSpan + "\">" + AdminUI.esc(text) + "</td>";
+      tb.appendChild(tr);
+    }
+
     function renderPending(tasks) {
       const tb = document.querySelector("#tblPending tbody");
-      const tbl = document.getElementById("tblPending");
-      const empty = document.getElementById("emptyPending");
       tb.innerHTML = "";
 
       if (!tasks.length) {
-        tbl.hidden = true;
-        empty.hidden = false;
+        renderEmptyRow(tb, 5, "暂无待办");
         return;
       }
-
-      tbl.hidden = false;
-      empty.hidden = true;
 
       tasks.forEach(function (task) {
         const tr = document.createElement("tr");
@@ -364,18 +366,12 @@
 
     function renderRejected(items) {
       const tb = document.querySelector("#tblRejected tbody");
-      const tbl = document.getElementById("tblRejected");
-      const empty = document.getElementById("emptyRejected");
       tb.innerHTML = "";
 
       if (!items.length) {
-        tbl.hidden = true;
-        empty.hidden = false;
+        renderEmptyRow(tb, 5, "暂无被驳回");
         return;
       }
-
-      tbl.hidden = false;
-      empty.hidden = true;
 
       items.forEach(function (item) {
         const tr = document.createElement("tr");
@@ -417,18 +413,12 @@
 
     function renderCases(cases) {
       const tb = document.querySelector("#tblCases tbody");
-      const tbl = document.getElementById("tblCases");
-      const empty = document.getElementById("emptyCases");
       tb.innerHTML = "";
 
       if (!cases.length) {
-        tbl.hidden = true;
-        empty.hidden = false;
+        renderEmptyRow(tb, 5, "暂无相关案件");
         return;
       }
-
-      tbl.hidden = false;
-      empty.hidden = true;
 
       cases.forEach(function (c) {
         const tr = document.createElement("tr");
