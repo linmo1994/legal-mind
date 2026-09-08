@@ -621,6 +621,7 @@ def handle_orchestrate(mcp_server, body: Dict[str, Any], on_event=None) -> Dict[
             doc_type=art.get("title") or "法律文书",
             created_by=body.get("_auth_user_id"),
             source="ai_draft_doc",
+            session_id=session_id,
         )
         art["artifact_id"] = row["id"]
         art["approval_status"] = row["approval_status"]

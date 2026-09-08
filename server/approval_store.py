@@ -54,6 +54,7 @@ class ApprovalStore:
                 source TEXT NOT NULL,
                 approval_status TEXT NOT NULL DEFAULT 'draft',
                 reject_comment TEXT,
+                session_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -95,6 +96,10 @@ class ApprovalStore:
             );
             """
         )
+        try:
+            conn.execute("ALTER TABLE doc_artifacts ADD COLUMN session_id TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         conn.close()
 
@@ -127,6 +132,7 @@ class ApprovalStore:
         doc_type: str,
         created_by: Optional[int] = None,
         source: str = "ai_draft_doc",
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         now = self._now()
         conn = self._connect()
@@ -140,13 +146,14 @@ class ApprovalStore:
             (case_id, doc_type),
         )
         version = int(cur.fetchone()["next_version"])
+        sid = (session_id or "").strip() or None
         cur.execute(
             """
             INSERT INTO doc_artifacts (
                 case_id, file_id, version, title, doc_type, created_by, source,
-                approval_status, reject_comment, created_at, updated_at
+                approval_status, reject_comment, session_id, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
             """,
             (
                 case_id,
@@ -157,6 +164,7 @@ class ApprovalStore:
                 created_by,
                 source,
                 ARTIFACT_STATUS_DRAFT,
+                sid,
                 now,
                 now,
             ),

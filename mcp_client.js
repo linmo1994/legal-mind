@@ -476,13 +476,15 @@ async function init() {
         return;
       }
       try {
-        // 首页跳转可带 case_id；先写入再拉列表，避免被默认清空
+        // 首页跳转可带 case_id / session_id；先写入再拉列表，避免被默认清空
         const bootParams = new URLSearchParams(window.location.search);
         const bootCase = bootParams.get('case_id');
+        const bootSessionId = bootParams.get('session_id');
         if (bootCase != null && String(bootCase).trim() !== '') {
           const n = parseInt(bootCase, 10);
           if (!Number.isNaN(n)) LegalMindAuth.setCaseId(n);
         }
+        window.__bootSessionId = bootSessionId || null;
         await loadActiveCaseOptions();
       } catch (e) {
         console.warn('加载案件列表失败', e);
@@ -530,6 +532,18 @@ async function init() {
         elements.sessionList.innerHTML = '';
         elements.sessionList.appendChild(errorDiv);
       }
+    }
+
+    // 从「被驳回 → 打开对话」带回原会话
+    if (window.__bootSessionId) {
+      try {
+        await loadSession(window.__bootSessionId);
+        console.log('✅ 已恢复引导会话', window.__bootSessionId);
+      } catch (e) {
+        console.warn('恢复引导会话失败', e);
+        showError(e.message || '无法打开原会话，请从左侧会话列表手动选择');
+      }
+      window.__bootSessionId = null;
     }
     
     console.log('========================================');
@@ -601,9 +615,7 @@ async function createNewSession(options) {
   try {
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: sessionApiHeaders(),
       body: JSON.stringify({
         session_id: sessionId,
         title: ''
@@ -658,7 +670,7 @@ async function ensureSessionPersistedOnServer() {
   try {
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: sessionApiHeaders(),
       body: JSON.stringify({
         session_id: currentSession.sessionId,
         title: currentSession.title || ''
@@ -7862,9 +7874,7 @@ async function saveSession(session) {
     // 更新会话信息
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions/${session.sessionId}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: sessionApiHeaders(),
       body: JSON.stringify(updates)
     });
     
@@ -7925,9 +7935,7 @@ async function addMessageToServer(sessionId, role, content, extra) {
     
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: sessionApiHeaders(),
       body: JSON.stringify({
         role: role,
         content: content,
@@ -7956,6 +7964,14 @@ async function addMessageToServer(sessionId, role, content, extra) {
   }
 }
 
+/** Session REST calls require Authorization after user-bound sessions. */
+function sessionApiHeaders(extra) {
+  if (typeof LegalMindAuth !== 'undefined' && LegalMindAuth.authHeaders) {
+    return LegalMindAuth.authHeaders(extra || {});
+  }
+  return Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+}
+
 // 加载会话列表（从服务端）
 async function loadSessionList() {
   if (!elements.sessionList) {
@@ -7967,10 +7983,15 @@ async function loadSessionList() {
     console.log('📋 开始加载会话列表...');
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
-      }
+      headers: sessionApiHeaders()
     });
+
+    if (response.status === 401) {
+      if (typeof LegalMindAuth !== 'undefined') {
+        LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
+      }
+      throw new Error('获取会话列表失败: HTTP 401');
+    }
     
     if (!response.ok) {
       throw new Error(`获取会话列表失败: HTTP ${response.status}`);
@@ -8879,9 +8900,7 @@ async function editSessionName(sessionId, titleSpan, session) {
     // 调用服务端API更新会话名称
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions/${sessionId}`, {
       method: 'POST',  // 服务端使用POST方法更新会话
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: sessionApiHeaders(),
       body: JSON.stringify({ title: trimmedTitle })
     });
     
@@ -8959,9 +8978,7 @@ async function deleteSession(sessionId) {
     
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions/${sessionId}`, {
       method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json'
-      }
+      headers: sessionApiHeaders()
     });
     
     if (!response.ok) {
@@ -9146,10 +9163,15 @@ async function loadSession(sessionId) {
   try {
     const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions/${sessionId}`, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
-      }
+      headers: sessionApiHeaders()
     });
+
+    if (response.status === 401) {
+      if (typeof LegalMindAuth !== 'undefined') {
+        LegalMindAuth.requireLogin('login.html?next=mcp_client.html');
+      }
+      throw new Error('加载会话失败: HTTP 401');
+    }
     
     if (!response.ok) {
       throw new Error(`加载会话失败: HTTP ${response.status}`);
@@ -9657,7 +9679,8 @@ function bindEvents() {
     
       try {
         const response = await fetch(`${CONFIG.mcpServerUrl}/api/sessions/all`, {
-          method: 'DELETE'
+          method: 'DELETE',
+          headers: sessionApiHeaders()
         });
         if (response.ok) {
           localStorage.removeItem('mcp_init_message_shown'); // 重置初始化消息标记

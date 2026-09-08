@@ -9,9 +9,28 @@
     .approvals-page { max-width: 960px; margin: 0 auto; padding: 24px 20px 48px; }
     .approvals-page h1 { margin: 0 0 8px; font-size: 1.5rem; }
     .approvals-page .muted { color: #64748b; font-size: 0.95rem; }
-    .workbench-section { margin-top: 32px; }
-    .workbench-section h2 { margin: 0 0 8px; font-size: 1.15rem; }
-    .workbench-section .section-desc { margin: 0 0 12px; }
+    .workbench-tabs {
+      display: flex; gap: 4px; margin: 20px 0 0; padding: 0;
+      border-bottom: 1px solid #e2e8f0; list-style: none;
+    }
+    .workbench-tab {
+      appearance: none; border: 0; background: transparent; cursor: pointer;
+      padding: 10px 16px; margin-bottom: -1px; font-size: 14px; color: #64748b;
+      border-bottom: 2px solid transparent; display: inline-flex; align-items: center; gap: 8px;
+    }
+    .workbench-tab:hover { color: #0f172a; }
+    .workbench-tab.is-active {
+      color: #0f172a; font-weight: 600; border-bottom-color: #2563eb;
+    }
+    .tab-count {
+      display: inline-block; min-width: 1.25rem; padding: 0 6px; border-radius: 999px;
+      background: #e2e8f0; color: #334155; font-size: 12px; line-height: 1.25rem; text-align: center;
+    }
+    .workbench-tab.is-active .tab-count { background: #dbeafe; color: #1d4ed8; }
+    .tab-count.has-alert { background: #fee2e2; color: #b91c1c; }
+    .workbench-panel { margin-top: 16px; }
+    .workbench-panel[hidden] { display: none !important; }
+    .workbench-panel .section-desc { margin: 0 0 12px; }
     .admin-table { width: 100%; margin-top: 8px; border-collapse: collapse; background: #fff; }
     .admin-table th, .admin-table td { border: 1px solid #e5e7eb; padding: 10px 12px; text-align: left; font-size: 14px; vertical-align: top; }
     .admin-table th { background: #f8fafc; }
@@ -34,8 +53,19 @@
     <p class="muted">待审文书、被驳回需处理的文书，以及与您相关的案件。无需进入管理后台。</p>
     <p id="status" class="muted"></p>
 
-    <section class="workbench-section" id="sectionPending">
-      <h2>待我审批</h2>
+    <nav class="workbench-tabs" role="tablist" aria-label="我的待办分类">
+      <button type="button" class="workbench-tab is-active" role="tab" id="tabPending" data-tab="pending" aria-selected="true" aria-controls="panelPending">
+        待办<span class="tab-count" id="countPending">0</span>
+      </button>
+      <button type="button" class="workbench-tab" role="tab" id="tabRejected" data-tab="rejected" aria-selected="false" aria-controls="panelRejected">
+        被驳回<span class="tab-count" id="countRejected">0</span>
+      </button>
+      <button type="button" class="workbench-tab" role="tab" id="tabCases" data-tab="cases" aria-selected="false" aria-controls="panelCases">
+        我的案件<span class="tab-count" id="countCases">0</span>
+      </button>
+    </nav>
+
+    <section class="workbench-panel" id="panelPending" role="tabpanel" aria-labelledby="tabPending">
       <p class="muted section-desc">指派给您的待审文书。通过后将进入下一环节或定稿；驳回须填写意见。</p>
       <p id="emptyPending" class="empty-hint muted" hidden>暂无待审批事项。</p>
       <table class="admin-table" id="tblPending" hidden>
@@ -52,8 +82,7 @@
       </table>
     </section>
 
-    <section class="workbench-section" id="sectionRejected">
-      <h2>需我处理（被驳回）</h2>
+    <section class="workbench-panel" id="panelRejected" role="tabpanel" aria-labelledby="tabRejected" hidden>
       <p class="muted section-desc">您提交的文书被驳回，请查看意见后修改并重新提交。</p>
       <p id="emptyRejected" class="empty-hint muted" hidden>暂无被驳回文书。</p>
       <table class="admin-table" id="tblRejected" hidden>
@@ -70,8 +99,7 @@
       </table>
     </section>
 
-    <section class="workbench-section" id="sectionCases">
-      <h2>我的案件</h2>
+    <section class="workbench-panel" id="panelCases" role="tabpanel" aria-labelledby="tabCases" hidden>
       <p class="muted section-desc">与您相关的案件，可一键进入对话并绑案。</p>
       <p id="emptyCases" class="empty-hint muted" hidden>暂无相关案件。</p>
       <table class="admin-table" id="tblCases" hidden>
@@ -93,6 +121,13 @@
   <script>
     let base = "";
     let caseMap = {};
+    let activeTab = "pending";
+
+    const TAB_PANELS = {
+      pending: "panelPending",
+      rejected: "panelRejected",
+      cases: "panelCases"
+    };
 
     const STEP_LABELS = {
       lead: "主办律师审核",
@@ -101,6 +136,34 @@
 
     function stepLabel(step) {
       return STEP_LABELS[step] || step || "—";
+    }
+
+    function switchTab(tab) {
+      if (!TAB_PANELS[tab]) tab = "pending";
+      activeTab = tab;
+      Object.keys(TAB_PANELS).forEach(function (key) {
+        const panel = document.getElementById(TAB_PANELS[key]);
+        const btn = document.querySelector('.workbench-tab[data-tab="' + key + '"]');
+        const on = key === tab;
+        if (panel) panel.hidden = !on;
+        if (btn) {
+          btn.classList.toggle("is-active", on);
+          btn.setAttribute("aria-selected", on ? "true" : "false");
+        }
+      });
+      try {
+        const url = new URL(location.href);
+        if (tab === "pending") url.searchParams.delete("tab");
+        else url.searchParams.set("tab", tab);
+        history.replaceState(null, "", url.pathname + url.search + url.hash);
+      } catch (e) {}
+    }
+
+    function setTabCount(id, n, alertWhenPositive) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = String(n);
+      el.classList.toggle("has-alert", !!(alertWhenPositive && n > 0));
     }
 
     function caseNoFor(task) {
@@ -117,11 +180,15 @@
       return d.toLocaleString("zh-CN", { hour12: false });
     }
 
-    function openCaseChat(caseId) {
+    function openCaseChat(caseId, sessionId) {
+      var page = "mcp_client.html?case_id=" + encodeURIComponent(caseId);
+      if (sessionId) {
+        page += "&session_id=" + encodeURIComponent(sessionId);
+      }
       if (window.parent && window.parent !== window && window.parent.loadPage) {
-        window.parent.loadPage("mcp_client.html?case_id=" + encodeURIComponent(caseId));
+        window.parent.loadPage(page);
       } else {
-        location.href = "mcp_client.html?case_id=" + encodeURIComponent(caseId);
+        location.href = page;
       }
     }
 
@@ -334,7 +401,7 @@
         chatBtn.type = "button";
         chatBtn.className = "btn-primary";
         chatBtn.textContent = "打开对话";
-        chatBtn.onclick = function () { openCaseChat(item.case_id); };
+        chatBtn.onclick = function () { openCaseChat(item.case_id, item.session_id); };
         actions.appendChild(chatBtn);
 
         const ackBtn = document.createElement("button");
@@ -394,15 +461,31 @@
       renderRejected(rejected);
       renderCases(cases);
 
-      const total = pending.length + rejected.length + cases.length;
-      document.getElementById("status").textContent = total
-        ? "待审批 " + pending.length + " · 被驳回 " + rejected.length + " · 我的案件 " + cases.length
-        : "";
+      setTabCount("countPending", pending.length, true);
+      setTabCount("countRejected", rejected.length, true);
+      setTabCount("countCases", cases.length, false);
+
+      document.getElementById("status").textContent = "";
     }
 
     (async function () {
       if (!LegalMindAuth.requireLogin("login.html?next=approvals.html")) return;
       base = await LegalMindAuth.mcpBase();
+
+      document.querySelectorAll(".workbench-tab").forEach(function (btn) {
+        btn.onclick = function () {
+          switchTab(btn.getAttribute("data-tab") || "pending");
+        };
+      });
+
+      let initialTab = "pending";
+      try {
+        const q = new URLSearchParams(location.search || "");
+        const t = q.get("tab");
+        if (t === "rejected" || t === "cases" || t === "pending") initialTab = t;
+      } catch (e) {}
+      switchTab(initialTab);
+
       try {
         await loadCaseMap();
         await load();

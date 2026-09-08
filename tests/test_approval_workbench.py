@@ -33,6 +33,20 @@ class TestApprovalWorkbench(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_create_artifact_stores_session_id(self):
+        art = self.store.create_artifact(
+            case_id=self.case["id"],
+            file_id="f-sess",
+            title="起诉状",
+            doc_type="起诉状",
+            created_by=self.assistant["id"],
+            source="ai_draft_doc",
+            session_id="sess_from_chat",
+        )
+        self.assertEqual(art["session_id"], "sess_from_chat")
+        again = self.store.get_artifact(art["id"])
+        self.assertEqual(again["session_id"], "sess_from_chat")
+
     def _create_and_reject(self, *, created_by, file_id, comment="格式不对"):
         art = self.store.create_artifact(
             case_id=self.case["id"],
@@ -41,6 +55,7 @@ class TestApprovalWorkbench(unittest.TestCase):
             doc_type="起诉状",
             created_by=created_by,
             source="ai_draft_doc",
+            session_id="sess_reject_src",
         )
         self.store.submit_for_review(
             art["id"],

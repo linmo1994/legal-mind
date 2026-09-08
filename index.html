@@ -337,7 +337,7 @@
         await ackRejectItems(items);
       } catch (e) { /* ignore */ }
       refreshApprovalsBadge();
-      loadPage('approvals.html');
+      loadPage('approvals.html?tab=rejected');
     };
     document.addEventListener('click', function (e) {
       const menu = document.getElementById('navUserMenu');

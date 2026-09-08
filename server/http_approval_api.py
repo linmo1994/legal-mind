@@ -132,6 +132,7 @@ class ApprovalHttpApi:
         title = (body.get("title") or "").strip()
         doc_type = (body.get("doc_type") or title or "法律文书").strip()
         source = (body.get("source") or "ai_draft_doc").strip()
+        session_id = (body.get("session_id") or "").strip() or None
         if not file_id:
             return _deny(400, "file_id 必填")
         if not title:
@@ -144,6 +145,7 @@ class ApprovalHttpApi:
             doc_type=doc_type,
             created_by=user["id"],
             source=source,
+            session_id=session_id,
         )
         self.approval_store.write_audit(
             actor_user_id=user["id"],
@@ -298,6 +300,7 @@ class ApprovalHttpApi:
                     "reject_comment": art.get("reject_comment"),
                     "updated_at": art.get("updated_at"),
                     "file_id": art.get("file_id"),
+                    "session_id": art.get("session_id"),
                     "ack": ack,
                 }
             )

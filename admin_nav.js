@@ -30,7 +30,7 @@
       items: [
         { id: "cases", href: "admin_cases.html", label: "案件", perm: "cap.case_manage" },
         { id: "clients", href: "admin_clients.html", label: "客户", perm: "cap.case_manage" },
-        { id: "approvals", href: "admin_approvals.html", label: "审批待办", perm: "page.admin.approvals" }
+        { id: "approvals", href: "approvals.html", label: "审批待办", perm: "page.admin.approvals" }
       ]
     },
     {
