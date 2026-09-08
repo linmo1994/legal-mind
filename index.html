@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>LegalMind（MCP）</title>
-  <link rel="stylesheet" href="index.css?v=20260907nav1">
+  <link rel="stylesheet" href="index.css?v=20260908approvals2">
 </head>
 <body>
   <header class="navbar">
@@ -17,6 +17,9 @@
           <span class="nav-user-caret" aria-hidden="true">▾</span>
         </button>
         <div id="navUserDropdown" class="nav-user-dropdown" hidden role="menu">
+          <button type="button" id="navApprovalsMenuBtn" role="menuitem">
+            我的待办<span id="navApprovalsBadge" class="nav-menu-badge" hidden></span>
+          </button>
           <button type="button" id="navAdminMenuBtn" role="menuitem" hidden>管理后台</button>
           <button type="button" id="navContactBtn" role="menuitem">联系我们</button>
           <div class="nav-user-dropdown-sep" role="separator" aria-hidden="true"></div>
@@ -25,6 +28,23 @@
       </div>
     </nav>
   </header>
+  <div id="rejectModal" class="contact-modal reject-modal" hidden>
+    <div class="contact-modal-backdrop" data-close-reject="1"></div>
+    <div class="contact-modal-panel" role="dialog" aria-modal="true" aria-labelledby="rejectModalTitle">
+      <div class="contact-modal-header">
+        <h3 id="rejectModalTitle">文书被驳回</h3>
+        <button type="button" class="contact-modal-close" data-close-reject="1" aria-label="关闭">×</button>
+      </div>
+      <div class="contact-modal-body">
+        <p class="contact-lead">以下文书审批未通过，请查看驳回意见并修改后重新提交。</p>
+        <ul id="rejectModalList" class="reject-modal-list"></ul>
+      </div>
+      <div class="contact-modal-footer reject-modal-footer">
+        <button type="button" class="contact-modal-secondary" id="rejectModalDismissBtn">知道了</button>
+        <button type="button" class="contact-modal-ok" id="rejectModalGoBtn">去处理</button>
+      </div>
+    </div>
+  </div>
   <div id="contactModal" class="contact-modal" hidden>
     <div class="contact-modal-backdrop" data-close-contact="1"></div>
     <div class="contact-modal-panel" role="dialog" aria-modal="true" aria-labelledby="contactModalTitle">
@@ -87,6 +107,131 @@
         || LegalMindAuth.hasPerm('cap.role_manage');
     }
 
+    function setApprovalsBadge(count) {
+      const badge = document.getElementById('navApprovalsBadge');
+      if (!badge) return;
+      if (count > 0) {
+        badge.hidden = false;
+        badge.textContent = count > 99 ? '99+' : String(count);
+      } else {
+        badge.hidden = true;
+        badge.textContent = '';
+      }
+    }
+
+    async function refreshApprovalsBadge() {
+      if (!window.LegalMindAuth || !LegalMindAuth.getToken()) {
+        setApprovalsBadge(0);
+        return;
+      }
+      try {
+        const base = await LegalMindAuth.mcpBase();
+        const resp = await fetch(base + '/api/approvals/workbench?badge_only=1', {
+          headers: LegalMindAuth.authHeaders()
+        });
+        if (!resp.ok) {
+          setApprovalsBadge(0);
+          return;
+        }
+        const data = await resp.json();
+        setApprovalsBadge(data.badge_count || 0);
+      } catch (e) {
+        setApprovalsBadge(0);
+      }
+    }
+
+    var REJECT_PROMPT_KEY = 'lm_reject_prompted';
+    var rejectModalItems = [];
+
+    function escHtml(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function truncateComment(text, maxLen) {
+      var s = String(text || '').trim();
+      if (s.length <= maxLen) return s;
+      return s.slice(0, maxLen) + '…';
+    }
+
+    function getRejectPromptedIds() {
+      try {
+        var raw = sessionStorage.getItem(REJECT_PROMPT_KEY);
+        if (!raw) return [];
+        var parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.map(String) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function markRejectPrompted(ids) {
+      var existing = getRejectPromptedIds();
+      var merged = {};
+      existing.forEach(function (id) { merged[id] = true; });
+      ids.forEach(function (id) { merged[String(id)] = true; });
+      sessionStorage.setItem(REJECT_PROMPT_KEY, JSON.stringify(Object.keys(merged)));
+    }
+
+    function closeRejectModal() {
+      var modal = document.getElementById('rejectModal');
+      if (modal) modal.hidden = true;
+      rejectModalItems = [];
+    }
+
+    function openRejectModal(items) {
+      rejectModalItems = items.slice();
+      markRejectPrompted(items.map(function (item) { return item.artifact_id; }));
+      var list = document.getElementById('rejectModalList');
+      list.innerHTML = items.map(function (item) {
+        var title = escHtml(item.title || '未命名文书');
+        var comment = escHtml(truncateComment(item.reject_comment, 80));
+        return '<li class="reject-modal-item">' +
+          '<div class="reject-modal-item-title">' + title + '</div>' +
+          '<div class="reject-modal-item-comment">' + comment + '</div>' +
+          '</li>';
+      }).join('');
+      document.getElementById('rejectModal').hidden = false;
+    }
+
+    async function ackRejectItems(items) {
+      if (!items.length) return;
+      var base = await LegalMindAuth.mcpBase();
+      var headers = LegalMindAuth.authHeaders();
+      await Promise.all(items.map(function (item) {
+        return fetch(base + '/api/approvals/rejects/' + encodeURIComponent(item.artifact_id) + '/ack', {
+          method: 'POST',
+          headers: headers,
+          body: '{}'
+        });
+      }));
+    }
+
+    async function maybeShowRejectPrompt() {
+      if (!window.LegalMindAuth || !LegalMindAuth.getToken()) return;
+      try {
+        var base = await LegalMindAuth.mcpBase();
+        var resp = await fetch(base + '/api/approvals/workbench', {
+          headers: LegalMindAuth.authHeaders()
+        });
+        if (!resp.ok) return;
+        var data = await resp.json();
+        var rejected = (data.rejected_mine || []).filter(function (r) { return !r.ack; });
+        if (!rejected.length) return;
+        var prompted = getRejectPromptedIds();
+        var promptedSet = {};
+        prompted.forEach(function (id) { promptedSet[id] = true; });
+        var toShow = rejected.filter(function (r) { return !promptedSet[String(r.artifact_id)]; });
+        if (!toShow.length) return;
+        openRejectModal(toShow);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+
     function closeUserMenu() {
       const menu = document.getElementById('navUserMenu');
       const dropdown = document.getElementById('navUserDropdown');
@@ -110,9 +255,12 @@
         const name = (s && s.user && (s.user.display_name || s.user.username)) || '已登录';
         userLabel.textContent = name;
         userMenu.hidden = false;
+        refreshApprovalsBadge();
+        maybeShowRejectPrompt();
       } else {
         userLabel.textContent = '';
         userMenu.hidden = true;
+        setApprovalsBadge(0);
         closeUserMenu();
       }
     }
@@ -122,6 +270,11 @@
     };
     document.getElementById('navLoginBtn').onclick = function () {
       loadPage('login.html?next=home.html');
+    };
+    document.getElementById('navApprovalsMenuBtn').onclick = function (e) {
+      e.stopPropagation();
+      closeUserMenu();
+      loadPage('approvals.html');
     };
     document.getElementById('navAdminMenuBtn').onclick = function (e) {
       e.stopPropagation();
@@ -164,6 +317,28 @@
         closeContactModal();
       }
     });
+    document.getElementById('rejectModal').addEventListener('click', function (e) {
+      if (e.target && e.target.getAttribute && e.target.getAttribute('data-close-reject')) {
+        closeRejectModal();
+      }
+    });
+    document.getElementById('rejectModalDismissBtn').onclick = async function () {
+      var items = rejectModalItems.slice();
+      closeRejectModal();
+      try {
+        await ackRejectItems(items);
+      } catch (e) { /* ignore */ }
+      refreshApprovalsBadge();
+    };
+    document.getElementById('rejectModalGoBtn').onclick = async function () {
+      var items = rejectModalItems.slice();
+      closeRejectModal();
+      try {
+        await ackRejectItems(items);
+      } catch (e) { /* ignore */ }
+      refreshApprovalsBadge();
+      loadPage('approvals.html');
+    };
     document.addEventListener('click', function (e) {
       const menu = document.getElementById('navUserMenu');
       if (!menu || menu.hidden) return;
@@ -195,6 +370,7 @@
     })();
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape') {
+        closeRejectModal();
         closeContactModal();
         closeUserMenu();
       }
